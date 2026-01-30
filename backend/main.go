@@ -3,7 +3,9 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -36,6 +38,50 @@ func enableCors(w *http.ResponseWriter) {
 	(*w).Header().Set("Access-Control-Allow-Headers", "Content-Type")
 }
 
+// Fungsi Helper untuk sinkronisasi profiles.xml dari backend ke AppData NAPS2
+// Supaya NAPS2 mengenali profile yang kita taruh di folder backend
+func syncProfilesToAppData() error {
+	// 1. Lokasi Source (Local Backend)
+	wd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("gagal get working dir: %v", err)
+	}
+	srcPath := filepath.Join(wd, "profiles.xml")
+
+	// Cek apakah file source ada
+	if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+		return fmt.Errorf("file profiles.xml tidak ditemukan di backend")
+	}
+
+	// 2. Lokasi Destination (AppData NAPS2)
+	appData, err := os.UserConfigDir()
+	if err != nil {
+		return fmt.Errorf("gagal get AppData: %v", err)
+	}
+	destDir := filepath.Join(appData, "NAPS2")
+	destPath := filepath.Join(destDir, "profiles.xml")
+
+	// Pastikan folder NAPS2 ada
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return fmt.Errorf("gagal buat folder NAPS2: %v", err)
+	}
+
+	// 3. Baca Source
+	input, err := os.ReadFile(srcPath)
+	if err != nil {
+		return fmt.Errorf("gagal baca source profiles.xml: %v", err)
+	}
+
+	// 4. Tulis ke Destination (Overwrite)
+	// Kita overwrite supaya konsisten dengan portable file
+	if err := os.WriteFile(destPath, input, 0644); err != nil {
+		return fmt.Errorf("gagal tulis destination profiles.xml: %v", err)
+	}
+
+	fmt.Println("Berhasil sinkronisasi profiles.xml ke AppData.")
+	return nil
+}
+
 func scanHandler(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
 
@@ -45,6 +91,14 @@ func scanHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fmt.Println("Menerima request scan...")
+
+	// --- STEP SINKRONISASI PROFILE ---
+	// Sebelum scan, pastikan NAPS2 pake profile lokal kita
+	if err := syncProfilesToAppData(); err != nil {
+		fmt.Printf("Warning: Gagal sync profiles: %v\n", err)
+		// Kita lanjut aja, siapa tau udah ada isinya
+	}
+	// ---------------------------------
 
 	// 1. Buat folder sementara khusus untuk request ini
 	tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("scan_session_%d", time.Now().UnixNano()))
@@ -56,13 +110,20 @@ func scanHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.RemoveAll(tempDir) // Hapus folder temp setelah selesai
 
+	// Ambil nama profile dari Query Param, kalau kosong pake default
+	selectedProfile := r.URL.Query().Get("profile")
+	if selectedProfile == "" {
+		selectedProfile = profileName // Default value dari konstanta
+	}
+
 	// 2. Siapkan command NAPS2
 	// Output pattern: $(n) akan diganti jadi urutan angka (1, 2, 3...)
 	// Contoh: scan_1.jpg, scan_2.jpg
 	outputPath := filepath.Join(tempDir, "scan_$(n).jpg")
 
 	// naps2.console.exe -o "C:\Temp\...\scan_$(n).jpg" -p "Plustek" --force
-	cmd := exec.Command(naps2Path, "-o", outputPath, "-p", profileName, "--force")
+	fmt.Printf("Scanning dengan profile: %s\n", selectedProfile)
+	cmd := exec.Command(naps2Path, "-o", outputPath, "-p", selectedProfile, "--force")
 
 	// 3. Eksekusi Command
 	output, err := cmd.CombinedOutput()
@@ -141,8 +202,72 @@ func scanHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("Scan sukses! Mengirim %d pasang gambar ke browser.\n", len(scanResults))
 }
 
+func profilesHandler(w http.ResponseWriter, r *http.Request) {
+	enableCors(&w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	// Baca profiles.xml dari folder yang sama dengan executable/working directory
+	// Ini membuat profile "portable" (ada di backend)
+	dir, err := os.Getwd()
+	if err != nil {
+		fmt.Printf("Gagal get working dir: %v\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(Response{Success: false, Message: "Gagal mendeteksi folder aplikasi"})
+		return
+	}
+
+	profilesPath := filepath.Join(dir, "profiles.xml")
+	xmlFile, err := os.Open(profilesPath)
+	if err != nil {
+		fmt.Printf("Gagal buka profiles.xml di backend: %v\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(Response{Success: false, Message: "Gagal membuka file profiles.xml di backend"})
+		return
+	}
+	defer xmlFile.Close()
+
+	// Simple XML parsing
+	// Kita cuma butuh ambil isi tag <DisplayName>...</DisplayName>
+	// Cara paling gampang tanpa bikin struct kompleks adalah baca file sebagai text dan regex,
+	// atau decoding XML decodernya.
+	// Kita coba pake standard xml decoder dengan struct minimalis
+	type ScanProfile struct {
+		DisplayName string `xml:"DisplayName"`
+	}
+	type ArrayOfScanProfile struct {
+		Profiles []ScanProfile `xml:"ScanProfile"`
+	}
+
+	var data ArrayOfScanProfile
+	byteValue, _ := io.ReadAll(xmlFile)
+
+	// Perlu import "encoding/xml" dan "io"
+	if err := xml.Unmarshal(byteValue, &data); err != nil {
+		fmt.Printf("Gagal parsing XML: %v\n", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(Response{Success: false, Message: "Gagal memparsing file profil"})
+		return
+	}
+
+	var profiles []string
+	for _, p := range data.Profiles {
+		if p.DisplayName != "" {
+			profiles = append(profiles, p.DisplayName)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":  true,
+		"profiles": profiles,
+	})
+}
+
 func main() {
 	http.HandleFunc("/scan", scanHandler)
+	http.HandleFunc("/profiles", profilesHandler)
 
 	port := ":5000"
 	fmt.Printf("Scanner Bridge (Golang) siap di http://localhost%s\n", port)

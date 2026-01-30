@@ -1,0 +1,59 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<ArrayOfScanProfile xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <ScanProfile>
+    <Version>2</Version>
+    <Device>
+      <ID>{6BDD1FC6-810F-11D0-BEC7-08002BE2092F}\0001</ID>
+      <Name>Duplex ADF Scanner(K76)</Name>
+      <IconUri xsi:nil="true" />
+      <ConnectionUri xsi:nil="true" />
+    </Device>
+    <Caps>
+      <PaperSources>Feeder,Duplex</PaperSources>
+      <FeederCheck>true</FeederCheck>
+      <Glass />
+      <Feeder>
+        <Resolutions>100,150,200,300,400,600</Resolutions>
+      </Feeder>
+      <Duplex>
+        <Resolutions>100,150,200,300,400,600</Resolutions>
+      </Duplex>
+    </Caps>
+    <DriverName>wia</DriverName>
+    <DisplayName>Duplex ADF Scanner(K76)</DisplayName>
+    <IconID>0</IconID>
+    <MaxQuality>false</MaxQuality>
+    <IsDefault>true</IsDefault>
+    <UseNativeUI>false</UseNativeUI>
+    <AfterScanScale>OneToOne</AfterScanScale>
+    <Brightness>0</Brightness>
+    <Contrast>0</Contrast>
+    <BitDepth>C24Bit</BitDepth>
+    <PageAlign>Right</PageAlign>
+    <PageSize>A4</PageSize>
+    <CustomPageSizeName xsi:nil="true" />
+    <CustomPageSize xsi:nil="true" />
+    <Resolution>Dpi200</Resolution>
+    <PaperSource>Duplex</PaperSource>
+    <EnableAutoSave>false</EnableAutoSave>
+    <AutoSaveSettings xsi:nil="true" />
+    <Quality>75</Quality>
+    <AutoDeskew>false</AutoDeskew>
+    <RotateDegrees>0</RotateDegrees>
+    <BrightnessContrastAfterScan>false</BrightnessContrastAfterScan>
+    <ForcePageSize>false</ForcePageSize>
+    <ForcePageSizeCrop>false</ForcePageSizeCrop>
+    <TwainImpl>Default</TwainImpl>
+    <TwainProgress>false</TwainProgress>
+    <ExcludeBlankPages>true</ExcludeBlankPages>
+    <BlankPageWhiteThreshold>50</BlankPageWhiteThreshold>
+    <BlankPageCoverageThreshold>50</BlankPageCoverageThreshold>
+    <WiaOffsetWidth>false</WiaOffsetWidth>
+    <WiaRetryOnFailure>false</WiaRetryOnFailure>
+    <WiaDelayBetweenScans>false</WiaDelayBetweenScans>
+    <WiaDelayBetweenScansSeconds>2</WiaDelayBetweenScansSeconds>
+    <WiaVersion>Default</WiaVersion>
+    <FlipDuplexedPages>false</FlipDuplexedPages>
+    <KeyValueOptions xsi:nil="true" />
+  </ScanProfile>
+</ArrayOfScanProfile>

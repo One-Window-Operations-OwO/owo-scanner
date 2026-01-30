@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 // --- Interface Data ---
 interface ScanPair {
@@ -17,10 +17,34 @@ interface ScanResponse {
 export default function Home() {
   const [scanResults, setScanResults] = useState<ScanPair[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
+  const [profiles, setProfiles] = useState<string[]>([]);
+  const [profileName, setProfileName] = useState<string>("");
   const [status, setStatus] = useState<{ type: 'idle' | 'success' | 'error'; msg: string }>({
     type: 'idle',
     msg: '',
   });
+
+  // Fetch profiles on mount
+  useEffect(() => {
+    const fetchProfiles = async () => {
+      try {
+        const res = await fetch('http://localhost:5000/profiles');
+        if (!res.ok) throw new Error('Failed to fetch profiles');
+        const data = await res.json();
+        if (data.success && data.profiles && Array.isArray(data.profiles)) {
+          setProfiles(data.profiles);
+          if (data.profiles.length > 0) {
+            setProfileName(data.profiles[0]); // Set default to first profile
+          }
+        }
+      } catch (err) {
+        console.error("Error fetching profiles:", err);
+        // Fallback or just keep empty
+      }
+    };
+
+    fetchProfiles();
+  }, []);
 
   const handleScan = async () => {
     setLoading(true);
@@ -28,7 +52,7 @@ export default function Home() {
     setScanResults([]);
 
     try {
-      const response = await fetch('http://localhost:5000/scan', {
+      const response = await fetch(`http://localhost:5000/scan?profile=${encodeURIComponent(profileName)}`, {
         method: 'GET',
       });
 
@@ -64,11 +88,46 @@ export default function Home() {
         {/* Header */}
         <div className="bg-slate-800 p-6 text-white text-center">
           <h1 className="text-2xl font-bold tracking-wide">Scanner Dokumentasi Sekolah</h1>
-          <p className="text-slate-300 text-sm mt-1">Plustek PS3180U Integrator</p>
         </div>
 
         {/* Content */}
         <div className="p-8 space-y-6">
+
+          {/* Profile Configuration */}
+          <div className="bg-blue-50 p-4 rounded-lg border border-blue-100">
+            <label htmlFor="profileName" className="block text-sm font-medium text-blue-900 mb-2">
+              Pilih Profil NAPS2
+            </label>
+            {profiles.length > 0 ? (
+              <select
+                id="profileName"
+                value={profileName}
+                onChange={(e) => setProfileName(e.target.value)}
+                className="w-full px-4 py-2 border border-blue-200 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-gray-700 bg-white"
+              >
+                {profiles.map((p, idx) => (
+                  <option key={idx} value={p}>{p}</option>
+                ))}
+              </select>
+            ) : (
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  id="profileName"
+                  value={profileName}
+                  onChange={(e) => setProfileName(e.target.value)}
+                  className="w-full px-4 py-2 border border-blue-200 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-gray-700 bg-white"
+                  placeholder="Nama Profile (Manual)"
+                />
+                <span className="text-xs text-gray-400 self-center whitespace-nowrap">
+                  (Gagal load profiles)
+                </span>
+              </div>
+            )}
+            <p className="text-xs text-blue-600 mt-2">
+              Profil diambil dari konfigurasi NAPS2 di komputer ini.
+            </p>
+          </div>
 
           {/* Status Indicator */}
           {status.msg && (
@@ -125,7 +184,6 @@ export default function Home() {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {/* Front Image */}
                       <div className="flex flex-col gap-2">
-                        <span className="text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Halaman Depan</span>
                         <img
                           src={pair.front}
                           alt={`Front ${index + 1}`}
@@ -136,7 +194,6 @@ export default function Home() {
                       {/* Back Image (if exists) */}
                       {pair.back ? (
                         <div className="flex flex-col gap-2">
-                          <span className="text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Halaman Belakang</span>
                           <img
                             src={pair.back}
                             alt={`Back ${index + 1}`}
