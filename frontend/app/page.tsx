@@ -3,14 +3,19 @@
 import { useState } from 'react';
 
 // --- Interface Data ---
+interface ScanPair {
+  front: string;
+  back?: string;
+}
+
 interface ScanResponse {
   success: boolean;
-  image?: string;
+  data?: ScanPair[];
   message?: string;
 }
 
 export default function Home() {
-  const [imageSrc, setImageSrc] = useState<string | null>(null);
+  const [scanResults, setScanResults] = useState<ScanPair[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [status, setStatus] = useState<{ type: 'idle' | 'success' | 'error'; msg: string }>({
     type: 'idle',
@@ -20,7 +25,7 @@ export default function Home() {
   const handleScan = async () => {
     setLoading(true);
     setStatus({ type: 'idle', msg: '⏳ Menghubungkan ke Scanner...' });
-    setImageSrc(null);
+    setScanResults([]);
 
     try {
       const response = await fetch('http://localhost:5000/scan', {
@@ -33,9 +38,9 @@ export default function Home() {
 
       const data: ScanResponse = await response.json();
 
-      if (data.success && data.image) {
-        setImageSrc(data.image);
-        setStatus({ type: 'success', msg: '✅ Scan Berhasil!' });
+      if (data.success && data.data) {
+        setScanResults(data.data);
+        setStatus({ type: 'success', msg: `✅ Scan Berhasil! ${data.data.length} dokumen ditemukan.` });
       } else {
         setStatus({ type: 'error', msg: `❌ Gagal: ${data.message || 'Unknown error'}` });
       }
@@ -54,7 +59,7 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       {/* Main Card */}
-      <div className="w-full max-w-2xl bg-white rounded-xl shadow-lg overflow-hidden border border-gray-100">
+      <div className="w-full max-w-4xl bg-white rounded-xl shadow-lg overflow-hidden border border-gray-100">
 
         {/* Header */}
         <div className="bg-slate-800 p-6 text-white text-center">
@@ -103,29 +108,52 @@ export default function Home() {
             )}
           </button>
 
-          {/* Preview Area */}
-          <div className={`mt-6 border-2 border-dashed rounded-xl flex flex-col items-center justify-center min-h-[300px] transition-colors ${imageSrc ? 'border-blue-300 bg-blue-50/30' : 'border-gray-300 bg-gray-50'
-            }`}>
-            {imageSrc ? (
-              <div className="w-full p-4 flex flex-col items-center">
-                <img
-                  src={imageSrc}
-                  alt="Preview Scan"
-                  className="max-w-full max-h-[500px] rounded-lg shadow-md border border-gray-200"
-                />
-                <div className="mt-6 flex gap-3 w-full justify-center">
-                  <a
-                    href={imageSrc}
-                    download={`scan_${new Date().getTime()}.jpg`}
-                    className="px-4 py-2 bg-white border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 shadow-sm text-sm"
-                  >
-                    ⬇️ Download JPG
-                  </a>
-                  {/* Tombol dummy buat upload nanti */}
-                  <button className="px-4 py-2 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 shadow-sm text-sm">
-                    💾 Simpan ke Database
-                  </button>
-                </div>
+          {/* Results Area */}
+          <div className={`mt-6 transition-colors ${scanResults.length > 0 ? '' : 'border-2 border-dashed border-gray-300 bg-gray-50 rounded-xl min-h-[200px] flex items-center justify-center'}`}>
+
+            {scanResults.length > 0 ? (
+              <div className="space-y-6">
+                {scanResults.map((pair, index) => (
+                  <div key={index} className="bg-gray-50 p-4 rounded-xl border border-gray-200">
+                    <div className="flex justify-between items-center mb-3">
+                      <span className="font-semibold text-gray-700">Dokumen #{index + 1}</span>
+                      <button className="text-xs bg-green-100 text-green-700 px-3 py-1 rounded-full font-medium border border-green-200 hover:bg-green-200">
+                        💾 Simpan Set Ini
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Front Image */}
+                      <div className="flex flex-col gap-2">
+                        <span className="text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Halaman Depan</span>
+                        <img
+                          src={pair.front}
+                          alt={`Front ${index + 1}`}
+                          className="w-full h-auto rounded-lg shadow-sm border border-gray-300 bg-white"
+                        />
+                      </div>
+
+                      {/* Back Image (if exists) */}
+                      {pair.back ? (
+                        <div className="flex flex-col gap-2">
+                          <span className="text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Halaman Belakang</span>
+                          <img
+                            src={pair.back}
+                            alt={`Back ${index + 1}`}
+                            className="w-full h-auto rounded-lg shadow-sm border border-gray-300 bg-white"
+                          />
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-2 opacity-50">
+                          <span className="text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Halaman Belakang</span>
+                          <div className="w-full h-full min-h-[200px] flex items-center justify-center bg-gray-200 rounded-lg border border-dashed border-gray-400">
+                            <span className="text-gray-500 text-sm">Tidak ada halaman belakang</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : (
               <div className="text-center p-6 text-gray-400">
