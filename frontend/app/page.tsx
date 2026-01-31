@@ -24,11 +24,42 @@ export default function Home() {
     msg: '',
   });
 
+  const [theme, setTheme] = useState<'light' | 'dark'>('light');
+
+  // Initialize theme
+  useEffect(() => {
+    // Check local storage or system preference
+    const storedTheme = localStorage.getItem('theme') as 'light' | 'dark' | null;
+    const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+    if (storedTheme) {
+      setTheme(storedTheme);
+      document.documentElement.classList.toggle('dark', storedTheme === 'dark');
+    } else if (systemPrefersDark) {
+      setTheme('dark');
+      document.documentElement.classList.add('dark');
+    }
+  }, []);
+
+  const toggleTheme = () => {
+    const newTheme = theme === 'light' ? 'dark' : 'light';
+    setTheme(newTheme);
+    localStorage.setItem('theme', newTheme);
+    document.documentElement.classList.toggle('dark', newTheme === 'dark');
+  };
+
   // Fetch profiles on mount
   useEffect(() => {
     const fetchProfiles = async () => {
+      // Skip fetching profiles in mock mode
+      if (process.env.NEXT_PUBLIC_USE_MOCK === 'true') {
+        setProfiles(['Mock Profile 1', 'Mock Profile 2']);
+        setProfileName('Mock Profile 1');
+        return;
+      }
+
       try {
-        const res = await fetch('http://localhost:5000/profiles');
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/profiles`);
         if (!res.ok) throw new Error('Failed to fetch profiles');
         const data = await res.json();
         if (data.success && data.profiles && Array.isArray(data.profiles)) {
@@ -52,7 +83,14 @@ export default function Home() {
     setScanResults([]);
 
     try {
-      const response = await fetch(`http://localhost:5000/scan?profile=${encodeURIComponent(profileName)}`, {
+      const isMock = process.env.NEXT_PUBLIC_USE_MOCK === 'true';
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+
+      const endpoint = isMock
+        ? `${apiUrl}`
+        : `${apiUrl}/scan?profile=${encodeURIComponent(profileName)}`;
+
+      const response = await fetch(endpoint, {
         method: 'GET',
       });
 
@@ -81,21 +119,36 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gray-50 dark:bg-slate-950 flex items-center justify-center p-4">
       {/* Main Card */}
-      <div className="w-full max-w-4xl bg-white rounded-xl shadow-lg overflow-hidden border border-gray-100">
+      <div className="w-full max-w-4xl bg-white dark:bg-slate-900 rounded-xl shadow-lg overflow-hidden border border-gray-100 dark:border-slate-800">
 
         {/* Header */}
-        <div className="bg-slate-800 p-6 text-white text-center">
+        <div className="bg-slate-800 p-6 text-white flex justify-between items-center">
           <h1 className="text-2xl font-bold tracking-wide">Scanner Dokumentasi Sekolah</h1>
+          <button
+            onClick={toggleTheme}
+            className="p-2 rounded-full bg-slate-700 hover:bg-slate-600 transition-colors"
+            aria-label="Toggle Theme"
+          >
+            {theme === 'light' ? (
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z" />
+              </svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" />
+              </svg>
+            )}
+          </button>
         </div>
 
         {/* Content */}
         <div className="p-8 space-y-6">
 
           {/* Profile Configuration */}
-          <div className="bg-blue-50 p-4 rounded-lg border border-blue-100">
-            <label htmlFor="profileName" className="block text-sm font-medium text-blue-900 mb-2">
+          <div className="bg-blue-50 dark:bg-slate-900/50 p-4 rounded-lg border border-gray-100 dark:border-gray-800">
+            <label htmlFor="profileName" className="block text-sm font-medium text-black dark:text-gray-200 mb-2">
               Pilih Profil NAPS2
             </label>
             {profiles.length > 0 ? (
@@ -103,7 +156,7 @@ export default function Home() {
                 id="profileName"
                 value={profileName}
                 onChange={(e) => setProfileName(e.target.value)}
-                className="w-full px-4 py-2 border border-blue-200 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-gray-700 bg-white"
+                className="w-full px-4 py-2 border border-blue-200 dark:border-blue-800/50 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-gray-700 dark:text-gray-200 bg-white dark:bg-slate-800"
               >
                 {profiles.map((p, idx) => (
                   <option key={idx} value={p}>{p}</option>
@@ -116,7 +169,7 @@ export default function Home() {
                   id="profileName"
                   value={profileName}
                   onChange={(e) => setProfileName(e.target.value)}
-                  className="w-full px-4 py-2 border border-blue-200 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-gray-700 bg-white"
+                  className="w-full px-4 py-2 border border-blue-200 dark:border-blue-800/50 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-gray-700 dark:text-gray-200 bg-white dark:bg-slate-800"
                   placeholder="Nama Profile (Manual)"
                 />
                 <span className="text-xs text-gray-400 self-center whitespace-nowrap">
@@ -168,14 +221,14 @@ export default function Home() {
           </button>
 
           {/* Results Area */}
-          <div className={`mt-6 transition-colors ${scanResults.length > 0 ? '' : 'border-2 border-dashed border-gray-300 bg-gray-50 rounded-xl min-h-[200px] flex items-center justify-center'}`}>
+          <div className={`mt-6 transition-colors ${scanResults.length > 0 ? '' : 'border-2 border-dashed border-gray-300 dark:border-slate-700 bg-gray-50 dark:bg-slate-900/50 rounded-xl min-h-[200px] flex items-center justify-center'}`}>
 
             {scanResults.length > 0 ? (
               <div className="space-y-6">
                 {scanResults.map((pair, index) => (
-                  <div key={index} className="bg-gray-50 p-4 rounded-xl border border-gray-200">
+                  <div key={index} className="bg-gray-50 dark:bg-slate-800/50 p-4 rounded-xl border border-gray-200 dark:border-slate-700">
                     <div className="flex justify-between items-center mb-3">
-                      <span className="font-semibold text-gray-700">Dokumen #{index + 1}</span>
+                      <span className="font-semibold text-gray-700 dark:text-gray-200">Dokumen #{index + 1}</span>
                       <button className="text-xs bg-green-100 text-green-700 px-3 py-1 rounded-full font-medium border border-green-200 hover:bg-green-200">
                         💾 Simpan Set Ini
                       </button>
@@ -187,7 +240,7 @@ export default function Home() {
                         <img
                           src={pair.front}
                           alt={`Front ${index + 1}`}
-                          className="w-full h-auto rounded-lg shadow-sm border border-gray-300 bg-white"
+                          className="w-full h-auto rounded-lg shadow-sm border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900"
                         />
                       </div>
 
@@ -203,7 +256,7 @@ export default function Home() {
                       ) : (
                         <div className="flex flex-col gap-2 opacity-50">
                           <span className="text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Halaman Belakang</span>
-                          <div className="w-full h-full min-h-[200px] flex items-center justify-center bg-gray-200 rounded-lg border border-dashed border-gray-400">
+                          <div className="w-full h-full min-h-[200px] flex items-center justify-center bg-gray-200 dark:bg-slate-800 rounded-lg border border-dashed border-gray-400 dark:border-slate-600">
                             <span className="text-gray-500 text-sm">Tidak ada halaman belakang</span>
                           </div>
                         </div>
