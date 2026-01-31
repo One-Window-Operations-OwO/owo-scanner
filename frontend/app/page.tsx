@@ -1,11 +1,16 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Tesseract from 'tesseract.js';
 
 // --- Interface Data ---
 interface ScanPair {
   front: string;
   back?: string;
+  frontText?: string;
+  backText?: string;
+  docName?: string;
+  ocrStatus?: 'idle' | 'processing' | 'success' | 'error';
 }
 
 interface ScanResponse {
@@ -19,10 +24,13 @@ export default function Home() {
   const [loading, setLoading] = useState<boolean>(false);
   const [profiles, setProfiles] = useState<string[]>([]);
   const [profileName, setProfileName] = useState<string>("");
-  const [status, setStatus] = useState<{ type: 'idle' | 'success' | 'error'; msg: string }>({
+  const [status, setStatus] = useState<{ type: 'idle' | 'success' | 'error' | 'processing'; msg: string }>({
     type: 'idle',
     msg: '',
   });
+
+  // State for Image Preview Modal
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
 
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
 
@@ -102,7 +110,11 @@ export default function Home() {
 
       if (data.success && data.data) {
         setScanResults(data.data);
-        setStatus({ type: 'success', msg: `✅ Scan Berhasil! ${data.data.length} dokumen ditemukan.` });
+        setStatus({ type: 'success', msg: `✅ Scan Berhasil! ${data.data.length} dokumen ditemukan. Memulai OCR...` });
+        
+        // --- TRIGGER AUTOMATIC OCR ---
+        await processOcr(data.data);
+
       } else {
         setStatus({ type: 'error', msg: `❌ Gagal: ${data.message || 'Unknown error'}` });
       }
@@ -116,6 +128,86 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // --- OCR LOGIC ---
+  
+  // Reusable function to process a single item
+  const processSingleItemOcr = async (item: ScanPair): Promise<{ text: string, detectedName: string | null }> => {
+    // Only process Visual Front (which is item.back in data)
+    if (!item.back) return { text: '', detectedName: null };
+
+    try {
+        const result = await Tesseract.recognize(item.back, 'ind');
+        const text = result.data.text;
+        
+        // Extract BAPP Number
+        const match = text.match(/Nomor\s*[:]\s*([A-Z0-9]+)/i);
+        const detectedName = (match && match[1]) ? match[1] : null;
+
+        return { text, detectedName };
+    } catch (err) {
+        console.error("OCR Error:", err);
+        return { text: "(Gagal reading)", detectedName: null };
+    }
+  };
+
+  const processOcr = async (scannedData: ScanPair[]) => {
+    setStatus(prev => ({ ...prev, type: 'processing', msg: '🔍 Sedang memproses OCR...' }));
+    
+    // Initialize OCR status for all items
+    const updatedResults: ScanPair[] = scannedData.map(item => ({
+        ...item,
+        ocrStatus: 'processing'
+    }));
+    setScanResults([...updatedResults]); // Update UI to show processing
+
+    for (let i = 0; i < updatedResults.length; i++) {
+        // Skip if already has name (unless forced? na, initial run)
+        const { text, detectedName } = await processSingleItemOcr(updatedResults[i]);
+        
+        updatedResults[i].backText = text;
+        if (detectedName) {
+            updatedResults[i].docName = detectedName;
+            updatedResults[i].ocrStatus = 'success';
+        } else {
+             updatedResults[i].docName = `Dokumen #${i + 1}`;
+             updatedResults[i].ocrStatus = 'error'; // Failed to extract name
+        }
+
+        setScanResults([...updatedResults]); // Update progressive
+    }
+
+    setStatus({ type: 'success', msg: `✅ Scan & OCR Selesai! ${updatedResults.length} dokumen diproses.` });
+  };
+
+  const handleRetryOcr = async (index: number) => {
+    setStatus({ type: 'processing', msg: `🔍 Mengulangi OCR untuk dokumen #${index + 1}...` });
+    
+    // Set individual item status to processing
+    const updatedResults = [...scanResults];
+    updatedResults[index].ocrStatus = 'processing';
+    setScanResults(updatedResults);
+
+    const { text, detectedName } = await processSingleItemOcr(updatedResults[index]);
+
+    updatedResults[index].backText = text;
+    if (detectedName) {
+        updatedResults[index].docName = detectedName;
+        updatedResults[index].ocrStatus = 'success';
+        setStatus({ type: 'success', msg: `✅ OCR Ulang Berhasil! Nama terdeteksi: ${detectedName}` });
+    } else {
+        updatedResults[index].ocrStatus = 'error';
+        setStatus({ type: 'error', msg: `⚠️ OCR Ulang Selesai, tapi nomor tidak ditemukan.` });
+    }
+    
+    setScanResults(updatedResults);
+  };
+
+  const handleNameChange = (index: number, newName: string) => {
+    const updated = [...scanResults];
+    updated[index].docName = newName;
+    setScanResults(updated);
   };
 
   return (
@@ -227,41 +319,98 @@ export default function Home() {
               <div className="space-y-6">
                 {scanResults.map((pair, index) => (
                   <div key={index} className="bg-gray-50 dark:bg-slate-800/50 p-4 rounded-xl border border-gray-200 dark:border-slate-700">
-                    <div className="flex justify-between items-center mb-3">
-                      <span className="font-semibold text-gray-700 dark:text-gray-200">Dokumen #{index + 1}</span>
-                      <button className="text-xs bg-green-100 text-green-700 px-3 py-1 rounded-full font-medium border border-green-200 hover:bg-green-200">
-                        💾 Simpan Set Ini
-                      </button>
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-3 gap-2">
+                      {/* Editable Document Name */}
+                      <input 
+                        type="text" 
+                        value={pair.docName || `Dokumen #${index + 1}`}
+                        onChange={(e) => handleNameChange(index, e.target.value)}
+                        className="font-semibold text-lg text-gray-700 dark:text-gray-200 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-blue-500 outline-none transition-colors px-1"
+                      />
+                      
+                      <div className="flex gap-2 items-center">
+                        {/* OCR Status Indicator */}
+                        {pair.ocrStatus === 'processing' && (
+                            <span className="text-xs text-blue-500 animate-pulse font-medium">Processing...</span>
+                        )}
+                        {pair.ocrStatus === 'success' && (
+                            <span className="text-xs text-green-600 font-bold bg-green-100 px-2 py-1 rounded-full flex items-center gap-1">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3">
+                                    <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clipRule="evenodd" />
+                                </svg>
+                                OCR OK
+                            </span>
+                        )}
+                         {pair.ocrStatus === 'error' && (
+                            <span className="text-xs text-red-600 font-bold bg-red-100 px-2 py-1 rounded-full flex items-center gap-1">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3">
+                                    <path fillRule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM8.28 7.22a.75.75 0 0 0-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 1 0 1.06 1.06L10 11.06l1.72 1.72a.75.75 0 1 0 1.06-1.06L11.06 10l1.72-1.72a.75.75 0 0 0-1.06-1.06L10 8.94 8.28 7.22Z" clipRule="evenodd" />
+                                </svg>
+                                OCR Fail
+                            </span>
+                        )}
+
+                        <button 
+                            onClick={() => handleRetryOcr(index)}
+                            title="Scan ulang OCR halaman depan"
+                            className={`p-2 rounded-full border transition-colors ${pair.ocrStatus === 'processing' ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-yellow-100 text-yellow-700 border-yellow-200 hover:bg-yellow-200'}`}
+                            disabled={pair.ocrStatus === 'processing'}
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={`w-4 h-4 ${pair.ocrStatus === 'processing' ? 'animate-spin' : ''}`}>
+                                {pair.ocrStatus === 'processing' ? (
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                                ) : (
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                                )}
+                            </svg>
+                        </button>
+                        <button className="text-xs bg-green-100 text-green-700 px-3 py-1 rounded-full font-medium border border-green-200 hover:bg-green-200">
+                            💾 Simpan
+                        </button>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {/* Front Image */}
-                      <div className="flex flex-col gap-2">
-                        <img
-                          src={pair.front}
-                          alt={`Front ${index + 1}`}
-                          className="w-full h-auto rounded-lg shadow-sm border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900"
-                        />
-                      </div>
-
-                      {/* Back Image (if exists) */}
+                      {/* Visual Front (Data: Back) */}
                       {pair.back ? (
-                        <div className="flex flex-col gap-2">
+                        <div className="flex flex-col gap-2 group relative">
+                           <span className="text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Halaman Depan</span>
                           <img
                             src={pair.back}
-                            alt={`Back ${index + 1}`}
-                            className="w-full h-auto rounded-lg shadow-sm border border-gray-300 bg-white"
+                            alt={`Front (Actual Back) ${index + 1}`}
+                            onClick={() => setPreviewImage(pair.back!)}
+                            className="w-full h-auto rounded-lg shadow-sm border border-gray-300 dark:border-slate-600 bg-white dark:bg-slate-900 cursor-zoom-in hover:brightness-95 transition-all"
                           />
+                           <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none">
+                                <span className="bg-black/50 text-white text-xs px-2 py-1 rounded">Klik untuk Preview</span>
+                           </div>
                         </div>
                       ) : (
                         <div className="flex flex-col gap-2 opacity-50">
-                          <span className="text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Halaman Belakang</span>
+                           <span className="text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Halaman Depan</span>
                           <div className="w-full h-full min-h-[200px] flex items-center justify-center bg-gray-200 dark:bg-slate-800 rounded-lg border border-dashed border-gray-400 dark:border-slate-600">
-                            <span className="text-gray-500 text-sm">Tidak ada halaman belakang</span>
+                            <span className="text-gray-500 text-sm">Tidak ada halaman depan</span>
                           </div>
                         </div>
                       )}
+
+                      {/* Visual Back (Data: Front) */}
+                      <div className="flex flex-col gap-2 group relative">
+                         <span className="text-xs font-medium text-gray-500 uppercase tracking-wider text-center">Halaman Belakang</span>
+                        <img
+                          src={pair.front}
+                          alt={`Back (Actual Front) ${index + 1}`}
+                          onClick={() => setPreviewImage(pair.front)}
+                          className="w-full h-auto rounded-lg shadow-sm border border-gray-300 bg-white cursor-zoom-in hover:brightness-95 transition-all"
+                        />
+                         <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none">
+                                <span className="bg-black/50 text-white text-xs px-2 py-1 rounded">Klik untuk Preview</span>
+                           </div>
+                      </div>
                     </div>
+
+                    {/* OCR Results Area Removed as requested */}
+
                   </div>
                 ))}
               </div>
@@ -278,6 +427,31 @@ export default function Home() {
 
         </div>
       </div>
+
+      {/* Image Preview Modal */}
+      {previewImage && (
+        <div 
+            className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex items-center justify-center p-4 cursor-zoom-out"
+            onClick={() => setPreviewImage(null)}
+        >
+            <div className="relative max-w-7xl max-h-[90vh]">
+                <img 
+                    src={previewImage} 
+                    alt="Preview" 
+                    className="max-h-[90vh] w-auto rounded-lg shadow-2xl hover:scale-105 transition-transform" 
+                />
+                <button 
+                    onClick={() => setPreviewImage(null)}
+                    className="absolute -top-12 right-0 text-white hover:text-gray-300 p-2"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-8 h-8">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+      )}
+
     </div>
   );
 }
