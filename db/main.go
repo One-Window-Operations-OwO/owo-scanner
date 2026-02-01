@@ -160,9 +160,125 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 		"message": "Dokumen berhasil digabung jadi PDF dan disimpan!",
 	})
 }
+
+type DashboardStat struct {
+	Termin       string `json:"termin"`
+	TotalSchools int64  `json:"total_schools"`
+	Scanned      int64  `json:"scanned"`
+	LogsAccepted int64  `json:"logs_accepted"`
+}
+
+func statsHandler(w http.ResponseWriter, r *http.Request) {
+	enableCors(&w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	// Helper structs for partial results
+	type Res struct {
+		Termin string
+		Cnt    int64
+	}
+
+	var totalRes, scannedRes, logsRes []Res
+	statsMap := make(map[string]*DashboardStat)
+
+	// 1. Get Total Schools per Termin
+	// SELECT termin, COUNT(*) FROM schools GROUP BY termin
+	database.DB.Table("schools").Select("termin, count(*) as cnt").Group("termin").Scan(&totalRes)
+
+	// 2. Get Scanned Count per Termin
+	database.DB.Table("schools").
+		Joins("INNER JOIN scan_records ON scan_records.npsn = schools.npsn").
+		Select("schools.termin, count(distinct scan_records.npsn) as cnt").
+		Group("schools.termin").
+		Scan(&scannedRes)
+
+	// 3. Get Logs Accepted Count per Termin
+	database.DB.Table("schools").
+		Joins("INNER JOIN logs ON logs.npsn = schools.npsn").
+		Where("logs.hasil_cek = ?", "sesuai").
+		Select("schools.termin, count(distinct logs.npsn) as cnt").
+		Group("schools.termin").
+		Scan(&logsRes)
+
+	// Merge Results
+	getStat := func(termin string) *DashboardStat {
+		if _, ok := statsMap[termin]; !ok {
+			statsMap[termin] = &DashboardStat{Termin: termin}
+		}
+		return statsMap[termin]
+	}
+
+	for _, r := range totalRes {
+		getStat(r.Termin).TotalSchools = r.Cnt
+	}
+	for _, r := range scannedRes {
+		getStat(r.Termin).Scanned = r.Cnt
+	}
+	for _, r := range logsRes {
+		getStat(r.Termin).LogsAccepted = r.Cnt
+	}
+
+	// Convert map to slice (Random order, sorted in frontend)
+	var finalStats []DashboardStat
+	for _, s := range statsMap {
+		if s.Termin != "" {
+			finalStats = append(finalStats, *s)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"data":    finalStats,
+	})
+}
+
+func recordsHandler(w http.ResponseWriter, r *http.Request) {
+	enableCors(&w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	searchNPSN := r.URL.Query().Get("npsn")
+	
+	var records []database.ScanRecord
+	query := database.DB.Model(&database.ScanRecord{}).Order("created_at DESC").Limit(50)
+
+	if searchNPSN != "" {
+		query = query.Where("npsn LIKE ?", "%"+searchNPSN+"%")
+	}
+
+	if err := query.Find(&records).Error; err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "Gagal ambil data records"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"data":    records,
+	})
+}
+
 func main() {
 	http.HandleFunc("/save", saveHandler)
+	http.HandleFunc("/stats", statsHandler)
+	http.HandleFunc("/records", recordsHandler)
 	database.InitDB()
+
+	// Serve Static Files (Scans)
+	storageDir := os.Getenv("SCAN_STORAGE_PATH")
+	if storageDir == "" {
+		storageDir = "./scans"
+	}
+	// Pastikan folder ada
+	os.MkdirAll(storageDir, 0755)
+	
+	fs := http.FileServer(http.Dir(storageDir))
+	http.Handle("/scans/", http.StripPrefix("/scans/", fs))
 
 	port := ":5000"
 	fmt.Printf("Database API (Golang) siap di http://localhost%s\n", port)

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Tesseract from "tesseract.js";
+import { useTheme } from "@/components/ThemeProvider";
 
 // --- Interface Data ---
 interface ApprovalData {
@@ -19,12 +20,12 @@ interface ScanPair {
   ocrStatus?: "idle" | "processing" | "success" | "error";
   // New properties for approval status
   matchStatus?:
-    | "idle"
-    | "loading"
-    | "matched"
-    | "not-matched"
-    | "ambiguous"
-    | "error";
+  | "idle"
+  | "loading"
+  | "matched"
+  | "not-matched"
+  | "ambiguous"
+  | "error";
   approvalData?: ApprovalData[]; // Stores the list of potential matches
   selectedApproval?: ApprovalData; // Stores the user-selected or auto-selected match
 }
@@ -54,34 +55,9 @@ export default function Home() {
   // View Mode State
   const [viewMode, setViewMode] = useState<"start" | "results">("start");
 
-  const [theme, setTheme] = useState<"light" | "dark">("light");
+  const { theme, toggleTheme } = useTheme();
 
-  // Initialize theme
-  useEffect(() => {
-    // Check local storage or system preference
-    const storedTheme = localStorage.getItem("theme") as
-      | "light"
-      | "dark"
-      | null;
-    const systemPrefersDark = window.matchMedia(
-      "(prefers-color-scheme: dark)",
-    ).matches;
-
-    if (storedTheme) {
-      setTheme(storedTheme);
-      document.documentElement.classList.toggle("dark", storedTheme === "dark");
-    } else if (systemPrefersDark) {
-      setTheme("dark");
-      document.documentElement.classList.add("dark");
-    }
-  }, []);
-
-  const toggleTheme = () => {
-    const newTheme = theme === "light" ? "dark" : "light";
-    setTheme(newTheme);
-    localStorage.setItem("theme", newTheme);
-    document.documentElement.classList.toggle("dark", newTheme === "dark");
-  };
+  // Fetch profiles on mount
 
   // Fetch profiles on mount
   useEffect(() => {
@@ -417,9 +393,8 @@ export default function Home() {
     <div className="min-h-screen bg-gray-50 dark:bg-slate-950 flex items-center justify-center p-4">
       {/* Main Card Container with Dynamic Width */}
       <div
-        className={`transition-all duration-500 ease-in-out ${
-          viewMode === "start" ? "w-full max-w-xl" : "w-full max-w-[95%]"
-        } bg-white dark:bg-slate-900 rounded-xl shadow-lg overflow-hidden border border-gray-100 dark:border-slate-800`}
+        className={`transition-all duration-500 ease-in-out ${viewMode === "start" ? "w-full max-w-xl" : "w-full max-w-[95%]"
+          } bg-white dark:bg-slate-900 rounded-xl shadow-lg overflow-hidden border border-gray-100 dark:border-slate-800`}
       >
         {/* Header */}
         <div className="bg-slate-800 p-6 text-white flex justify-between items-center">
@@ -559,13 +534,12 @@ export default function Home() {
               {/* Status Indicator */}
               {status.msg && (
                 <div
-                  className={`p-4 rounded-lg text-sm font-medium border ${
-                    status.type === "error"
-                      ? "bg-red-50 text-red-700 border-red-200"
-                      : status.type === "success"
-                        ? "bg-green-50 text-green-700 border-green-200"
-                        : "bg-blue-50 text-blue-700 border-blue-200"
-                  }`}
+                  className={`p-4 rounded-lg text-sm font-medium border ${status.type === "error"
+                    ? "bg-red-50 text-red-700 border-red-200"
+                    : status.type === "success"
+                      ? "bg-green-50 text-green-700 border-green-200"
+                      : "bg-blue-50 text-blue-700 border-blue-200"
+                    }`}
                 >
                   {status.msg}
                 </div>
@@ -575,11 +549,10 @@ export default function Home() {
               <button
                 onClick={handleScan}
                 disabled={loading}
-                className={`w-full py-4 px-6 rounded-lg font-bold text-white shadow-md transition-all transform hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center gap-2 ${
-                  loading
-                    ? "bg-gray-400 cursor-not-allowed opacity-75"
-                    : "bg-blue-600 hover:bg-blue-700"
-                }`}
+                className={`w-full py-4 px-6 rounded-lg font-bold text-white shadow-md transition-all transform hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center gap-2 ${loading
+                  ? "bg-gray-400 cursor-not-allowed opacity-75"
+                  : "bg-blue-600 hover:bg-blue-700"
+                  }`}
               >
                 {loading ? (
                   <>
@@ -721,15 +694,14 @@ export default function Home() {
                 {scanResults.map((pair, index) => (
                   <div
                     key={index}
-                    className={`p-5 rounded-2xl border-2 transition-all duration-300 shadow-sm mb-6 ${
-                      pair.matchStatus === "matched"
-                        ? pair.selectedApproval?.hasil_cek === "sesuai"
-                          ? "bg-green-50/50 border-green-200 dark:bg-green-950/20 dark:border-green-800"
-                          : "bg-red-50/50 border-red-200 dark:bg-red-950/20 dark:border-red-800"
-                        : pair.matchStatus === "ambiguous"
-                          ? "bg-amber-50/50 border-amber-200 dark:bg-amber-950/20 dark:border-amber-800"
-                          : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800"
-                    }`}
+                    className={`p-5 rounded-2xl border-2 transition-all duration-300 shadow-sm mb-6 ${pair.matchStatus === "matched"
+                      ? pair.selectedApproval?.hasil_cek === "sesuai"
+                        ? "bg-green-50/50 border-green-200 dark:bg-green-950/20 dark:border-green-800"
+                        : "bg-red-50/50 border-red-200 dark:bg-red-950/20 dark:border-red-800"
+                      : pair.matchStatus === "ambiguous"
+                        ? "bg-amber-50/50 border-amber-200 dark:bg-amber-950/20 dark:border-amber-800"
+                        : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800"
+                      }`}
                   >
                     {/* --- HEADER SECTION --- */}
                     <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-5">
@@ -788,11 +760,10 @@ export default function Home() {
                         <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1" />
                         <button
                           onClick={() => handleSave(index)} // <--- TAMBAHIN INI
-                          className={`flex items-center gap-2 px-5 py-2 text-white rounded-xl text-sm font-bold transition-all active:scale-95 shadow-lg ${
-                            pair.matchStatus === "matched"
-                              ? "bg-indigo-600 hover:bg-indigo-700"
-                              : "bg-gray-400 opacity-50 cursor-not-allowed"
-                          }`}
+                          className={`flex items-center gap-2 px-5 py-2 text-white rounded-xl text-sm font-bold transition-all active:scale-95 shadow-lg ${pair.matchStatus === "matched"
+                            ? "bg-indigo-600 hover:bg-indigo-700"
+                            : "bg-gray-400 opacity-50 cursor-not-allowed"
+                            }`}
                         >
                           <span>Simpan</span>
                         </button>
@@ -810,11 +781,10 @@ export default function Home() {
 
                       {pair.matchStatus === "matched" && (
                         <div
-                          className={`flex items-center justify-between p-3 rounded-xl font-bold text-sm border ${
-                            pair.selectedApproval?.hasil_cek === "sesuai"
-                              ? "text-green-700 bg-green-100 border-green-200 dark:bg-green-900/30 dark:border-green-800"
-                              : "text-red-700 bg-red-100 border-red-200 dark:bg-red-900/30 dark:border-red-800"
-                          }`}
+                          className={`flex items-center justify-between p-3 rounded-xl font-bold text-sm border ${pair.selectedApproval?.hasil_cek === "sesuai"
+                            ? "text-green-700 bg-green-100 border-green-200 dark:bg-green-900/30 dark:border-green-800"
+                            : "text-red-700 bg-red-100 border-red-200 dark:bg-red-900/30 dark:border-red-800"
+                            }`}
                         >
                           <div className="flex items-center gap-2">
                             {pair.selectedApproval?.hasil_cek === "sesuai"
