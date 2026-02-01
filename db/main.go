@@ -65,14 +65,34 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// --- CEK DUPLIKAT DULU DI SINI ---
+	var count int64
+	database.DB.Model(&database.ScanRecord{}).Where("sn_bapp = ?", req.SNBapp).Count(&count)
+	if count > 0 {
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Data gagal disimpan! SN BAPP sudah terdaftar.",
+		})
+		return
+	}
+	// --------------------------------
+
 	storageDir := os.Getenv("SCAN_STORAGE_PATH")
 	if storageDir == "" {
-		storageDir = "C:\\bapp_storage\\scans"
+		storageDir = "./scans" // Default Linux friendly
 	}
 	os.MkdirAll(storageDir, 0755)
 
 	fileNameBase := fmt.Sprintf("%s_%s", req.NPSN, req.SNBapp)
 	pdfPath := filepath.Join(storageDir, fileNameBase+".pdf")
+
+	// Cek juga secara fisik apakah filenya ada (opsional tapi bagus buat jaga-jaga)
+	if _, err := os.Stat(pdfPath); err == nil {
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "File PDF sudah ada di storage!"})
+		return
+	}
 
 	pdf := gofpdf.New("P", "mm", "A4", "")
 
@@ -145,7 +165,7 @@ func main() {
 	database.InitDB()
 
 	port := ":5000"
-	fmt.Printf("Scanner Bridge (Golang) siap di http://localhost%s\n", port)
+	fmt.Printf("Database API (Golang) siap di http://localhost%s\n", port)
 
 	if err := http.ListenAndServe(port, nil); err != nil {
 		log.Fatal("Gagal menjalankan server:", err)

@@ -1,2 +1,5 @@
 /tmp
 .env
+docker-compose.yaml
+scan-results/
+mysql-data/
