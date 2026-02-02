@@ -12,7 +12,39 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	_ "embed"
+
+	"syscall"
+
+	"github.com/getlantern/systray"
 )
+
+var (
+	kernel32         = syscall.NewLazyDLL("kernel32.dll")
+	user32           = syscall.NewLazyDLL("user32.dll")
+	getConsoleWindow = kernel32.NewProc("GetConsoleWindow")
+	showWindow       = user32.NewProc("ShowWindow")
+)
+
+const (
+	SW_HIDE = 0
+	SW_SHOW = 5
+)
+
+func showConsole() {
+	hwnd, _, _ := getConsoleWindow.Call()
+	if hwnd != 0 {
+		showWindow.Call(hwnd, SW_SHOW)
+	}
+}
+
+func hideConsole() {
+	hwnd, _, _ := getConsoleWindow.Call()
+	if hwnd != 0 {
+		showWindow.Call(hwnd, SW_HIDE)
+	}
+}
 
 // --- CONFIGURATION ---
 // Sesuaikan path ini dengan lokasi install NAPS2 di PC lu
@@ -232,14 +264,78 @@ type ScanRecord struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+//go:embed icon.ico
+var iconData []byte
+
+func onReady() {
+	systray.SetIcon(iconData)
+	systray.SetTitle("Scanner Bridge")
+	systray.SetTooltip("OWO Scanner Bridge")
+
+	mRestart := systray.AddMenuItem("Restart", "Restart the application")
+	mConsole := systray.AddMenuItem("Hide Console", "Show/Hide the console window")
+	mQuit := systray.AddMenuItem("Exit", "Quit the whole app")
+
+	consoleVisible := true // Default visible
+
+	// Handlers for tray menu
+	go func() {
+		for {
+			select {
+			case <-mQuit.ClickedCh:
+				systray.Quit()
+			case <-mConsole.ClickedCh:
+				if consoleVisible {
+					hideConsole()
+					mConsole.SetTitle("Show Console")
+					consoleVisible = false
+				} else {
+					showConsole()
+					mConsole.SetTitle("Hide Console")
+					consoleVisible = true
+				}
+			case <-mRestart.ClickedCh:
+				fmt.Println("Restarting...")
+				exe, err := os.Executable()
+				if err != nil {
+					fmt.Printf("Failed to get executable path: %v\n", err)
+					continue
+				}
+				cmd := exec.Command(exe, os.Args[1:]...)
+				// Detach process to ensure clean restart
+				cmd.Stdin = os.Stdin
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				if err := cmd.Start(); err != nil {
+					fmt.Printf("Failed to restart: %v\n", err)
+				} else {
+					systray.Quit()
+				}
+			}
+		}
+	}()
+
+	// Start Server
+	go func() {
+		http.HandleFunc("/scan", scanHandler)
+		http.HandleFunc("/profiles", profilesHandler)
+
+		port := ":5000"
+		fmt.Printf("Scanner Bridge (Golang) siap di http://localhost%s\n", port)
+
+		if err := http.ListenAndServe(port, nil); err != nil {
+			log.Printf("Gagal menjalankan server: %v", err)
+			systray.Quit()
+		}
+	}()
+}
+
+func onExit() {
+	// Clean up here if needed
+	fmt.Println("Exiting Scanner Bridge...")
+	os.Exit(0)
+}
+
 func main() {
-	http.HandleFunc("/scan", scanHandler)
-	http.HandleFunc("/profiles", profilesHandler)
-
-	port := ":5000"
-	fmt.Printf("Scanner Bridge (Golang) siap di http://localhost%s\n", port)
-
-	if err := http.ListenAndServe(port, nil); err != nil {
-		log.Fatal("Gagal menjalankan server:", err)
-	}
+	systray.Run(onReady, onExit)
 }
