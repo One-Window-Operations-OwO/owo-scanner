@@ -264,9 +264,11 @@ func recordsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 type IsApprovedResult struct {
-	HasilCek string `json:"hasil_cek"`
-	NPSN     string `json:"npsn"`
-	SNBapp   string `json:"sn_bapp" gorm:"column:sn_bapp"`
+	HasilCek    string `json:"hasil_cek"`
+	NPSN        string `json:"npsn"`
+	SNBapp      string `json:"sn_bapp" gorm:"column:sn_bapp"`
+	NamaSekolah string `json:"nama_sekolah" gorm:"column:nama_sekolah"`
+	Kode        string `json:"kode" gorm:"column:kode"`
 }
 
 func isApprovedHandler(w http.ResponseWriter, r *http.Request) {
@@ -289,9 +291,9 @@ func isApprovedHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Query raw SQL based on parameter
 	if noBapp != "" {
-		err = database.DB.Raw("SELECT hasil_cek, npsn, sn_bapp FROM v_logs WHERE nomor_bapp = ? ORDER BY tanggal_pengecekan DESC, id DESC", noBapp).Scan(&results).Error
+		err = database.DB.Raw("SELECT hasil_cek, npsn, sn_bapp, nama_sekolah, kode FROM v_logs WHERE nomor_bapp = ? ORDER BY tanggal_pengecekan DESC, id DESC", noBapp).Scan(&results).Error
 	} else {
-		err = database.DB.Raw("SELECT hasil_cek, npsn, sn_bapp FROM v_logs WHERE npsn = ? ORDER BY tanggal_pengecekan DESC, id DESC", npsn).Scan(&results).Error
+		err = database.DB.Raw("SELECT hasil_cek, npsn, sn_bapp, nama_sekolah, kode FROM v_logs WHERE npsn = ? ORDER BY tanggal_pengecekan DESC, id DESC", npsn).Scan(&results).Error
 	}
 
 	if err != nil {
@@ -337,7 +339,7 @@ func main() {
 	fs := http.FileServer(http.Dir(storageDir))
 	http.Handle("/scans/", http.StripPrefix("/scans/", fs))
 
-	port := ":5000"
+	port := ":5001"
 	fmt.Printf("Database API (Golang) siap di http://localhost%s\n", port)
 
 	if err := http.ListenAndServe(port, nil); err != nil {
