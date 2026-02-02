@@ -276,15 +276,24 @@ func isApprovedHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	noBapp := r.URL.Query().Get("no_bapp")
-	if noBapp == "" {
+	npsn := r.URL.Query().Get("npsn")
+
+	if noBapp == "" && npsn == "" {
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]interface{}{"message": "Parameter no_bapp wajib diisi."})
+		json.NewEncoder(w).Encode(map[string]interface{}{"message": "Parameter no_bapp atau npsn wajib diisi."})
 		return
 	}
 
 	var results []IsApprovedResult
-	// Query raw SQL
-	err := database.DB.Raw("SELECT hasil_cek, npsn, sn_bapp FROM v_logs WHERE nomor_bapp = ? ORDER BY tanggal_pengecekan DESC, id DESC", noBapp).Scan(&results).Error
+	var err error
+
+	// Query raw SQL based on parameter
+	if noBapp != "" {
+		err = database.DB.Raw("SELECT hasil_cek, npsn, sn_bapp FROM v_logs WHERE nomor_bapp = ? ORDER BY tanggal_pengecekan DESC, id DESC", noBapp).Scan(&results).Error
+	} else {
+		err = database.DB.Raw("SELECT hasil_cek, npsn, sn_bapp FROM v_logs WHERE npsn = ? ORDER BY tanggal_pengecekan DESC, id DESC", npsn).Scan(&results).Error
+	}
+
 	if err != nil {
 		log.Println("Error querying v_logs:", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -314,7 +323,7 @@ func main() {
 	http.HandleFunc("/save", saveHandler)
 	http.HandleFunc("/stats", statsHandler)
 	http.HandleFunc("/records", recordsHandler)
-	http.HandleFunc("/api/is-approved", isApprovedHandler)
+	http.HandleFunc("/is-approved", isApprovedHandler)
 	database.InitDB()
 
 	// Serve Static Files (Scans)

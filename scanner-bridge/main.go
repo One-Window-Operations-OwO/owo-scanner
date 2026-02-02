@@ -320,7 +320,7 @@ func onReady() {
 		http.HandleFunc("/scan", scanHandler)
 		http.HandleFunc("/profiles", profilesHandler)
 
-		port := ":5000"
+		port := ":5001"
 		fmt.Printf("Scanner Bridge (Golang) siap di http://localhost%s\n", port)
 
 		if err := http.ListenAndServe(port, nil); err != nil {
