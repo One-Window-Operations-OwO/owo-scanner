@@ -242,7 +242,7 @@ func recordsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	searchNPSN := r.URL.Query().Get("npsn")
-	
+
 	var records []database.ScanRecord
 	query := database.DB.Model(&database.ScanRecord{}).Order("created_at DESC").Limit(50)
 
@@ -263,10 +263,58 @@ func recordsHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type IsApprovedResult struct {
+	HasilCek string `json:"hasil_cek"`
+	NPSN     string `json:"npsn"`
+	SNBapp   string `json:"sn_bapp" gorm:"column:sn_bapp"`
+}
+
+func isApprovedHandler(w http.ResponseWriter, r *http.Request) {
+	enableCors(&w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	noBapp := r.URL.Query().Get("no_bapp")
+	if noBapp == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{"message": "Parameter no_bapp wajib diisi."})
+		return
+	}
+
+	var results []IsApprovedResult
+	// Query raw SQL
+	err := database.DB.Raw("SELECT hasil_cek, npsn, sn_bapp FROM v_logs WHERE nomor_bapp = ? ORDER BY tanggal_pengecekan DESC, id DESC", noBapp).Scan(&results).Error
+	if err != nil {
+		log.Println("Error querying v_logs:", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{"message": "Gagal mengecek status approval.", "error": err.Error()})
+		return
+	}
+
+	// Deduplication (Client side logic migration: unique NPSN, take first)
+	uniqueMap := make(map[string]IsApprovedResult)
+	var uniqueLogs []IsApprovedResult
+
+	for _, row := range results {
+		if _, exists := uniqueMap[row.NPSN]; !exists {
+			uniqueMap[row.NPSN] = row
+			uniqueLogs = append(uniqueLogs, row)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Success",
+		"data":    uniqueLogs,
+	})
+}
+
 func main() {
 	http.HandleFunc("/save", saveHandler)
 	http.HandleFunc("/stats", statsHandler)
 	http.HandleFunc("/records", recordsHandler)
+	http.HandleFunc("/api/is-approved", isApprovedHandler)
 	database.InitDB()
 
 	// Serve Static Files (Scans)
@@ -276,7 +324,7 @@ func main() {
 	}
 	// Pastikan folder ada
 	os.MkdirAll(storageDir, 0755)
-	
+
 	fs := http.FileServer(http.Dir(storageDir))
 	http.Handle("/scans/", http.StripPrefix("/scans/", fs))
 
