@@ -342,7 +342,7 @@ func main() {
 	fs := http.FileServer(http.Dir(storageDir))
 	http.Handle("/scans/", http.StripPrefix("/scans/", fs))
 
-	port := ":5001"
+	port := ":5000"
 	fmt.Printf("Database API (Golang) siap di http://localhost%s\n", port)
 
 	if err := http.ListenAndServe(port, nil); err != nil {
