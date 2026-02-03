@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"io"
 	"log"
 	"net/http"
@@ -139,39 +142,62 @@ func scanHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Helper function baca file jadi Base64
-	fileToBase64 := func(path string) (string, error) {
-		imgBytes, err := os.ReadFile(path)
+	// Helper function: Baca file -> Decode JPEG -> Rotate 180 -> Encode JPEG -> Base64
+	processImage := func(path string) (string, error) {
+		f, err := os.Open(path)
 		if err != nil {
 			return "", err
 		}
-		return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(imgBytes), nil
+		defer f.Close()
+
+		// Decode JPEG
+		img, err := jpeg.Decode(f)
+		if err != nil {
+			return "", fmt.Errorf("gagal decode jpeg: %v", err)
+		}
+
+		// Rotate 180 degrees
+		bounds := img.Bounds()
+		width, height := bounds.Dx(), bounds.Dy()
+		newImg := image.NewRGBA(bounds)
+		for y := 0; y < height; y++ {
+			for x := 0; x < width; x++ {
+				// 180 degree rotation: (x, y) -> (width-1-x, height-1-y)
+				newImg.Set(width-1-x, height-1-y, img.At(x, y))
+			}
+		}
+
+		// Encode back to JPEG
+		var buf bytes.Buffer
+		if err := jpeg.Encode(&buf, newImg, nil); err != nil {
+			return "", fmt.Errorf("gagal encode jpeg: %v", err)
+		}
+
+		return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()), nil
 	}
 
 	var scanResults []ScanPair
 
 	// 5. Loop file dengan step 2 (0, 2, 4...)
-	// Asumsi n urutannya benar berdasarkan nama glob
-	// Kalau mau lebih aman harus sort dulu, tapi biasanya glob return sesuai OS (seringkali urut nama)
-	// Kita percayakan naps2 exportnya scan_1.jpg, scan_2.jpg dsb dan glob sortnya workable.
 	for i := 0; i < len(files); i += 2 {
 		pair := ScanPair{}
 
 		// Proses Front (i)
-		frontB64, err := fileToBase64(files[i])
+		fmt.Printf("Processing Front: %s\n", files[i])
+		frontB64, err := processImage(files[i])
 		if err != nil {
-			fmt.Printf("Error baca file %s: %v\n", files[i], err)
+			fmt.Printf("Error process file %s: %v\n", files[i], err)
 			continue
 		}
 		pair.Front = frontB64
 
 		// Proses Back (i+1) jika ada
 		if i+1 < len(files) {
-			backB64, err := fileToBase64(files[i+1])
+			fmt.Printf("Processing Back: %s\n", files[i+1])
+			backB64, err := processImage(files[i+1])
 			if err != nil {
-				fmt.Printf("Error baca file %s: %v\n", files[i+1], err)
-				// Kalau back gagal, tetep masukin front? atau error?
-				// Kita keep front aja, back kosong.
+				fmt.Printf("Error process file %s: %v\n", files[i+1], err)
+				// Kalau back gagal, kita biarkan kosong atau handle error
 			} else {
 				pair.Back = backB64
 			}
@@ -187,7 +213,7 @@ func scanHandler(w http.ResponseWriter, r *http.Request) {
 		Data:    scanResults,
 	})
 
-	fmt.Printf("Scan sukses! Mengirim %d pasang gambar ke browser.\n", len(scanResults))
+	fmt.Printf("Scan sukses! Mengirim %d pasang gambar (rotated 180) ke browser.\n", len(scanResults))
 }
 
 func profilesHandler(w http.ResponseWriter, r *http.Request) {
