@@ -19,6 +19,7 @@ type ScanRecord struct {
 	NPSN      string    `json:"npsn"`
 	SNBapp    string    `gorm:"type:varchar(191);uniqueIndex" json:"sn_bapp"`
 	HasilCek  string    `json:"hasil_cek"`
+	Kode      string    `json:"kode"` // Added Kode field
 	Path      string    `json:"path"`
 	CreatedAt time.Time `json:"created_at"`
 }

@@ -30,6 +30,7 @@ type SaveRequest struct {
 	NPSN       string `json:"npsn"`
 	SNBapp     string `json:"sn_bapp"`
 	HasilCek   string `json:"hasil_cek"`
+	Kode       string `json:"kode"` // Added field
 	ImageFront string `json:"image_front"`
 	ImageBack  string `json:"image_back"`
 }
@@ -48,6 +49,7 @@ type ScanRecord struct {
 	NPSN      string    `json:"npsn"`
 	SNBapp    string    `gorm:"uniqueIndex" json:"sn_bapp"`
 	HasilCek  string    `json:"hasil_cek"`
+	Kode      string    `json:"kode"` // Added field
 	Path      string    `json:"path"` // <--- CUMA SATU KOLOM INI AJA
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -138,6 +140,7 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 		NPSN:     req.NPSN,
 		SNBapp:   req.SNBapp,
 		HasilCek: req.HasilCek,
+		Kode:     req.Kode, // Added mapping
 		Path:     pdfPath,
 	}
 

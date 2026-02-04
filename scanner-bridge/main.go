@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "embed"
@@ -144,6 +145,18 @@ func scanHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Helper function: Baca file -> Decode JPEG -> Rotate 180 -> Encode JPEG -> Base64
 	processImage := func(path string) (string, error) {
+		// Cek apakah perlu rotate (kecuali profile SP-1120)
+		shouldRotate := !strings.Contains(selectedProfile, "SP-1120")
+
+		if !shouldRotate {
+			// Kalau gak perlu rotate, langsung baca file aslinya
+			fileBytes, err := os.ReadFile(path)
+			if err != nil {
+				return "", err
+			}
+			return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(fileBytes), nil
+		}
+
 		f, err := os.Open(path)
 		if err != nil {
 			return "", err
