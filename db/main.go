@@ -43,16 +43,8 @@ func enableCors(w *http.ResponseWriter) {
 }
 
 // 1. Update dulu struct di database/db.go kamu biar cuma satu kolom path
-type ScanRecord struct {
-	ID        uint      `gorm:"primaryKey"`
-	DocName   string    `json:"doc_name"`
-	NPSN      string    `json:"npsn"`
-	SNBapp    string    `gorm:"uniqueIndex" json:"sn_bapp"`
-	HasilCek  string    `json:"hasil_cek"`
-	Kode      string    `json:"kode"` // Added field
-	Path      string    `json:"path"` // <--- CUMA SATU KOLOM INI AJA
-	CreatedAt time.Time `json:"created_at"`
-}
+// 1. Update dulu struct di database/db.go kamu biar cuma satu kolom path
+// (Struct lokal ini dihapus biar gak bingung, pakai yang di database/db.go aja)
 
 func saveHandler(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
@@ -68,16 +60,10 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// --- CEK DUPLIKAT DULU DI SINI ---
-	var count int64
-	database.DB.Model(&database.ScanRecord{}).Where("sn_bapp = ?", req.SNBapp).Count(&count)
-	if count > 0 {
-		w.WriteHeader(http.StatusConflict)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"message": "Data gagal disimpan! SN BAPP sudah terdaftar.",
-		})
-		return
-	}
+	// (Check Logika Duplikat dihapus karena kolom sn_bapp sudah didrop)
+	// Jika ingin cek duplikat, bisa pakai NPSN saja atau logika lain.
+	// Untuk sekarang, kita allow multiple scan per NPSN atau client yang handle.
+	// --------------------------------
 	// --------------------------------
 
 	storageDir := os.Getenv("SCAN_STORAGE_PATH")
@@ -136,12 +122,8 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newRecord := database.ScanRecord{
-		DocName:  req.DocName,
-		NPSN:     req.NPSN,
-		SNBapp:   req.SNBapp,
-		HasilCek: req.HasilCek,
-		Kode:     req.Kode, // Added mapping
-		Path:     pdfPath,
+		NPSN: req.NPSN,
+		Path: pdfPath,
 	}
 
 	result := database.DB.Create(&newRecord)
@@ -238,6 +220,17 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type RecordResponse struct {
+	ID          uint      `json:"id"`
+	NPSN        string    `json:"npsn"`
+	NamaSekolah string    `json:"nama_sekolah"`
+	SNBapp      string    `json:"sn_bapp"`
+	HasilCek    string    `json:"hasil_cek"`
+	Kode        string    `json:"kode"`
+	Path        string    `json:"path"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 func recordsHandler(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
 	if r.Method == "OPTIONS" {
@@ -245,15 +238,37 @@ func recordsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	searchNPSN := r.URL.Query().Get("npsn")
+	var records []RecordResponse
 
-	var records []database.ScanRecord
-	query := database.DB.Model(&database.ScanRecord{}).Order("created_at DESC").Limit(50)
+	// Query kompleks untuk join scan_records, schools, dan log terakhir
+	query := `
+		SELECT 
+			sr.id, sr.npsn, sr.path, sr.created_at, 
+			s.nama_sekolah, s.kode,
+			l.sn_bapp, l.hasil_cek
+		FROM scan_records sr
+		LEFT JOIN schools s ON sr.npsn = s.npsn
+		LEFT JOIN (
+			SELECT l1.npsn, l1.sn_bapp, l1.hasil_cek
+			FROM logs l1
+			JOIN (
+				SELECT MAX(id) as id FROM logs GROUP BY npsn
+			) l2 ON l1.id = l2.id
+		) l ON sr.npsn = l.npsn
+		WHERE 1=1
+	`
+
+	args := []interface{}{}
 
 	if searchNPSN != "" {
-		query = query.Where("npsn LIKE ?", "%"+searchNPSN+"%")
+		query += " AND sr.npsn LIKE ?"
+		args = append(args, "%"+searchNPSN+"%")
 	}
 
-	if err := query.Find(&records).Error; err != nil {
+	query += " ORDER BY sr.created_at DESC LIMIT 50"
+
+	if err := database.DB.Raw(query, args...).Scan(&records).Error; err != nil {
+		log.Println("Error fetching records:", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "Gagal ambil data records"})
 		return
