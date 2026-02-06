@@ -19,7 +19,9 @@ type ScanPair struct {
 	Front string `json:"front"`          // Base64 string
 	Back  string `json:"back,omitempty"` // Base64 string
 }
-
+type DeleteRequest struct {
+	NPSN string `json:"npsn"`
+}
 type Response struct {
 	Success bool       `json:"success"`
 	Data    []ScanPair `json:"data,omitempty"`
@@ -45,7 +47,14 @@ func enableCors(w *http.ResponseWriter) {
 // 1. Update dulu struct di database/db.go kamu biar cuma satu kolom path
 // 1. Update dulu struct di database/db.go kamu biar cuma satu kolom path
 // (Struct lokal ini dihapus biar gak bingung, pakai yang di database/db.go aja)
-
+func home(w http.ResponseWriter, r *http.Request) {
+	enableCors(&w)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "API is running",
+		"time":    time.Now(),
+	})
+}
 func saveHandler(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
 	if r.Method == "OPTIONS" {
@@ -339,11 +348,70 @@ func isApprovedHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func deleteHandler(w http.ResponseWriter, r *http.Request) {
+	enableCors(&w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req DeleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "Invalid request payload"})
+		return
+	}
+
+	if req.NPSN == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "NPSN is required"})
+		return
+	}
+
+	storageDir := os.Getenv("SCAN_STORAGE_PATH")
+	if storageDir == "" {
+		storageDir = "./scans"
+	}
+
+	files, _ := os.ReadDir(storageDir)
+	deletedFilesCount := 0
+	prefix := req.NPSN + "_"
+
+	for _, file := range files {
+		if strings.HasPrefix(file.Name(), prefix) && strings.HasSuffix(file.Name(), ".pdf") {
+			fullPath := filepath.Join(storageDir, file.Name())
+			if err := os.Remove(fullPath); err == nil {
+				deletedFilesCount++
+			}
+		}
+	}
+
+	dbResult := database.DB.Unscoped().Where("npsn = ?", req.NPSN).Delete(&database.ScanRecord{})
+
+	if dbResult.Error != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": dbResult.Error.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Operation successful. Deleted %d database records and %d physical files.", dbResult.RowsAffected, deletedFilesCount),
+	})
+}
+
 func main() {
+	http.HandleFunc("/delete", deleteHandler)
 	http.HandleFunc("/save", saveHandler)
 	http.HandleFunc("/stats", statsHandler)
 	http.HandleFunc("/records", recordsHandler)
 	http.HandleFunc("/is-approved", isApprovedHandler)
+	http.HandleFunc("/", home)
 	database.InitDB()
 
 	// Serve Static Files (Scans)
