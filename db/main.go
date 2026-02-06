@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jung-kurt/gofpdf"
+	"github.com/xuri/excelize/v2"
 )
 
 type ScanPair struct {
@@ -405,12 +406,78 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func exportHandler(w http.ResponseWriter, r *http.Request) {
+	enableCors(&w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	type ExportRow struct {
+		NPSN        string
+		NamaSekolah string
+		Termin      string
+		CreatedAt   string // Tanggal Scan
+		Path        string // Link Path Scan
+	}
+
+	var rows []ExportRow
+
+	query := `
+		SELECT 
+			sr.npsn, 
+			s.nama_sekolah, 
+			s.termin, 
+			DATE_FORMAT(sr.created_at, '%Y-%m-%d %H:%i:%s') as created_at, 
+			sr.path
+		FROM scan_records sr
+		LEFT JOIN schools s ON sr.npsn = s.npsn
+		ORDER BY sr.created_at DESC
+	`
+
+	if err := database.DB.Raw(query).Scan(&rows).Error; err != nil {
+		log.Println("Error fetching export data:", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	f := excelize.NewFile()
+	defer func() {
+		if err := f.Close(); err != nil {
+			log.Println("Error closing excel file:", err)
+		}
+	}()
+
+	// Header
+	headers := []string{"NPSN", "Nama Sekolah", "Termin", "Tanggal Scan", "Link Path Scan"}
+	for i, h := range headers {
+		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+		f.SetCellValue("Sheet1", cell, h)
+	}
+
+	// Data
+	for i, row := range rows {
+		f.SetCellValue("Sheet1", fmt.Sprintf("A%d", i+2), row.NPSN)
+		f.SetCellValue("Sheet1", fmt.Sprintf("B%d", i+2), row.NamaSekolah)
+		f.SetCellValue("Sheet1", fmt.Sprintf("C%d", i+2), row.Termin)
+		f.SetCellValue("Sheet1", fmt.Sprintf("D%d", i+2), row.CreatedAt)
+		f.SetCellValue("Sheet1", fmt.Sprintf("E%d", i+2), row.Path)
+	}
+
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	w.Header().Set("Content-Disposition", "attachment; filename=export_records.xlsx")
+
+	if err := f.Write(w); err != nil {
+		log.Println("Error writing excel to response:", err)
+	}
+}
+
 func main() {
 	http.HandleFunc("/delete", deleteHandler)
 	http.HandleFunc("/save", saveHandler)
 	http.HandleFunc("/stats", statsHandler)
 	http.HandleFunc("/records", recordsHandler)
 	http.HandleFunc("/is-approved", isApprovedHandler)
+	http.HandleFunc("/export", exportHandler)
 	http.HandleFunc("/", home)
 	database.InitDB()
 
