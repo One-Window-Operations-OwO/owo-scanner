@@ -230,6 +230,42 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func workStatsHandler(w http.ResponseWriter, r *http.Request) {
+	enableCors(&w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	startDate := r.URL.Query().Get("start_date")
+	endDate := r.URL.Query().Get("end_date")
+
+	// If no date provided, default to today
+	if startDate == "" || endDate == "" {
+		now := time.Now().Format("2006-01-02")
+		startDate = now
+		endDate = now
+	}
+
+	var scannedCount int64
+
+	// 1. Get Scanned Count (Filtered by Date)
+	database.DB.Table("scan_records").
+		Where("DATE(created_at) BETWEEN ? AND ?", startDate, endDate).
+		Count(&scannedCount)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"data": map[string]int64{
+			"scanned": scannedCount,
+		},
+		"period": map[string]string{
+			"start": startDate,
+			"end":   endDate,
+		},
+	})
+}
+
 type RecordResponse struct {
 	ID          uint      `json:"id"`
 	NPSN        string    `json:"npsn"`
@@ -475,6 +511,7 @@ func main() {
 	http.HandleFunc("/delete", deleteHandler)
 	http.HandleFunc("/save", saveHandler)
 	http.HandleFunc("/stats", statsHandler)
+	http.HandleFunc("/work-stats", workStatsHandler)
 	http.HandleFunc("/records", recordsHandler)
 	http.HandleFunc("/is-approved", isApprovedHandler)
 	http.HandleFunc("/export", exportHandler)
