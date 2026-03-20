@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"scanner-bridge/database"
@@ -16,38 +20,125 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
+const baseApiUrl = "https://s3.pnj-digit.site"
+
 type ScanPair struct {
-	Front string `json:"front"`          // Base64 string
-	Back  string `json:"back,omitempty"` // Base64 string
+	Front string `json:"front"`
+	Back  string `json:"back,omitempty"`
 }
+
 type DeleteRequest struct {
 	NPSN string `json:"npsn"`
 }
+
 type Response struct {
 	Success bool       `json:"success"`
 	Data    []ScanPair `json:"data,omitempty"`
 	Message string     `json:"message,omitempty"`
 }
+
 type SaveRequest struct {
 	DocName    string `json:"doc_name"`
 	NPSN       string `json:"npsn"`
 	SNBapp     string `json:"sn_bapp"`
 	HasilCek   string `json:"hasil_cek"`
-	Kode       string `json:"kode"` // Added field
+	Kode       string `json:"kode"`
 	ImageFront string `json:"image_front"`
 	ImageBack  string `json:"image_back"`
 }
 
-// Middleware manual buat CORS (biar Next.js bisa akses)
+type DashboardStat struct {
+	Termin       string `json:"termin"`
+	TotalSchools int64  `json:"total_schools"`
+	Scanned      int64  `json:"scanned"`
+	LogsAccepted int64  `json:"logs_accepted"`
+}
+
+type RecordResponse struct {
+	ID          uint      `json:"id"`
+	NPSN        string    `json:"npsn"`
+	NamaSekolah string    `json:"nama_sekolah"`
+	SNBapp      string    `json:"sn_bapp"`
+	HasilCek    string    `json:"hasil_cek"`
+	Kode        string    `json:"kode"`
+	Path        string    `json:"path"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type IsApprovedResult struct {
+	HasilCek    string `json:"hasil_cek"`
+	NPSN        string `json:"npsn"`
+	SNBapp      string `json:"sn_bapp" gorm:"column:sn_bapp"`
+	NamaSekolah string `json:"nama_sekolah" gorm:"column:nama_sekolah"`
+	Kode        string `json:"kode" gorm:"column:kode"`
+}
+
 func enableCors(w *http.ResponseWriter) {
 	(*w).Header().Set("Access-Control-Allow-Origin", "*")
 	(*w).Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS, POST")
 	(*w).Header().Set("Access-Control-Allow-Headers", "Content-Type")
 }
 
-// 1. Update dulu struct di database/db.go kamu biar cuma satu kolom path
-// 1. Update dulu struct di database/db.go kamu biar cuma satu kolom path
-// (Struct lokal ini dihapus biar gak bingung, pakai yang di database/db.go aja)
+func uploadToS3(filePath string, folder string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	_ = writer.WriteField("folder", folder)
+
+	part, err := writer.CreateFormFile("file", filepath.Base(filePath))
+	if err != nil {
+		return err
+	}
+	io.Copy(part, file)
+	writer.Close()
+
+	req, err := http.NewRequest("POST", baseApiUrl+"/send", body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("gagal upload s3 status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+func deleteFromS3(fileName string, folder string) error {
+	s3ApiUrl := fmt.Sprintf("%s/delete?folder=%s&file=%s", baseApiUrl, folder, fileName)
+	req, err := http.NewRequest("DELETE", s3ApiUrl, nil)
+	if err != nil {
+		return err
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("gagal hapus file s3 status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
 func home(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
 	w.Header().Set("Content-Type", "application/json")
@@ -56,6 +147,7 @@ func home(w http.ResponseWriter, r *http.Request) {
 		"time":    time.Now(),
 	})
 }
+
 func saveHandler(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
 	if r.Method == "OPTIONS" {
@@ -69,28 +161,9 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// --- CEK DUPLIKAT DULU DI SINI ---
-	// (Check Logika Duplikat dihapus karena kolom sn_bapp sudah didrop)
-	// Jika ingin cek duplikat, bisa pakai NPSN saja atau logika lain.
-	// Untuk sekarang, kita allow multiple scan per NPSN atau client yang handle.
-	// --------------------------------
-	// --------------------------------
-
-	storageDir := os.Getenv("SCAN_STORAGE_PATH")
-	if storageDir == "" {
-		storageDir = "./scans" // Default Linux friendly
-	}
-	os.MkdirAll(storageDir, 0755)
-
 	fileNameBase := fmt.Sprintf("%s_%s", req.NPSN, req.SNBapp)
-	pdfPath := filepath.Join(storageDir, fileNameBase+".pdf")
-
-	// Cek juga secara fisik apakah filenya ada (opsional tapi bagus buat jaga-jaga)
-	if _, err := os.Stat(pdfPath); err == nil {
-		w.WriteHeader(http.StatusConflict)
-		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "File PDF sudah ada di storage!"})
-		return
-	}
+	pdfName := fileNameBase + ".pdf"
+	pdfPath := filepath.Join(os.TempDir(), pdfName)
 
 	pdf := gofpdf.New("P", "mm", "A4", "")
 
@@ -131,17 +204,23 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 		os.Remove(tmpB)
 	}
 
+	errUpload := uploadToS3(pdfPath, "scan-bapp-ifp")
+	os.Remove(pdfPath)
+
+	if errUpload != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "Gagal upload PDF ke S3"})
+		return
+	}
+
 	newRecord := database.ScanRecord{
 		NPSN: req.NPSN,
-		Path: pdfPath,
+		Path: pdfName,
 	}
 
 	result := database.DB.Create(&newRecord)
 	if result.Error != nil {
-		os.Remove(pdfPath)
-
-		fmt.Println("Gagal simpan (Duplikat?):", result.Error)
-		w.WriteHeader(http.StatusConflict) // 409 Conflict
+		w.WriteHeader(http.StatusConflict)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": false,
 			"message": "Data gagal disimpan! NPSN atau SN BAPP mungkin sudah terdaftar.",
@@ -152,15 +231,8 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
-		"message": "Dokumen berhasil digabung jadi PDF dan disimpan!",
+		"message": "Dokumen berhasil digabung jadi PDF dan disimpan ke S3!",
 	})
-}
-
-type DashboardStat struct {
-	Termin       string `json:"termin"`
-	TotalSchools int64  `json:"total_schools"`
-	Scanned      int64  `json:"scanned"`
-	LogsAccepted int64  `json:"logs_accepted"`
 }
 
 func statsHandler(w http.ResponseWriter, r *http.Request) {
@@ -169,7 +241,6 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Helper structs for partial results
 	type Res struct {
 		Termin string
 		Cnt    int64
@@ -178,18 +249,14 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	var totalRes, scannedRes, logsRes []Res
 	statsMap := make(map[string]*DashboardStat)
 
-	// 1. Get Total Schools per Termin
-	// SELECT termin, COUNT(*) FROM schools GROUP BY termin
 	database.DB.Table("schools").Select("termin, count(*) as cnt").Group("termin").Scan(&totalRes)
 
-	// 2. Get Scanned Count per Termin
 	database.DB.Table("schools").
 		Joins("INNER JOIN scan_records ON scan_records.npsn = schools.npsn").
 		Select("schools.termin, count(distinct scan_records.npsn) as cnt").
 		Group("schools.termin").
 		Scan(&scannedRes)
 
-	// 3. Get Logs Accepted Count per Termin
 	database.DB.Table("schools").
 		Joins("INNER JOIN logs ON logs.npsn = schools.npsn").
 		Where("logs.hasil_cek = ?", "sesuai").
@@ -197,7 +264,6 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		Group("schools.termin").
 		Scan(&logsRes)
 
-	// Merge Results
 	getStat := func(termin string) *DashboardStat {
 		if _, ok := statsMap[termin]; !ok {
 			statsMap[termin] = &DashboardStat{Termin: termin}
@@ -215,7 +281,6 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		getStat(r.Termin).LogsAccepted = r.Cnt
 	}
 
-	// Convert map to slice (Random order, sorted in frontend)
 	var finalStats []DashboardStat
 	for _, s := range statsMap {
 		if s.Termin != "" {
@@ -239,7 +304,6 @@ func workStatsHandler(w http.ResponseWriter, r *http.Request) {
 	startDate := r.URL.Query().Get("start_date")
 	endDate := r.URL.Query().Get("end_date")
 
-	// If no date provided, default to today
 	if startDate == "" || endDate == "" {
 		now := time.Now().Format("2006-01-02")
 		startDate = now
@@ -248,7 +312,6 @@ func workStatsHandler(w http.ResponseWriter, r *http.Request) {
 
 	var scannedCount int64
 
-	// 1. Get Scanned Count (Filtered by Date)
 	database.DB.Table("scan_records").
 		Where("DATE(created_at) BETWEEN ? AND ?", startDate, endDate).
 		Count(&scannedCount)
@@ -266,17 +329,6 @@ func workStatsHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type RecordResponse struct {
-	ID          uint      `json:"id"`
-	NPSN        string    `json:"npsn"`
-	NamaSekolah string    `json:"nama_sekolah"`
-	SNBapp      string    `json:"sn_bapp"`
-	HasilCek    string    `json:"hasil_cek"`
-	Kode        string    `json:"kode"`
-	Path        string    `json:"path"`
-	CreatedAt   time.Time `json:"created_at"`
-}
-
 func recordsHandler(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
 	if r.Method == "OPTIONS" {
@@ -286,7 +338,6 @@ func recordsHandler(w http.ResponseWriter, r *http.Request) {
 	searchNPSN := r.URL.Query().Get("npsn")
 	var records []RecordResponse
 
-	// Query kompleks untuk join scan_records, schools, dan log terakhir
 	query := `
 		SELECT 
 			sr.id, sr.npsn, sr.path, sr.created_at, 
@@ -314,7 +365,6 @@ func recordsHandler(w http.ResponseWriter, r *http.Request) {
 	query += " ORDER BY sr.created_at DESC LIMIT 50"
 
 	if err := database.DB.Raw(query, args...).Scan(&records).Error; err != nil {
-		log.Println("Error fetching records:", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "Gagal ambil data records"})
 		return
@@ -325,14 +375,6 @@ func recordsHandler(w http.ResponseWriter, r *http.Request) {
 		"success": true,
 		"data":    records,
 	})
-}
-
-type IsApprovedResult struct {
-	HasilCek    string `json:"hasil_cek"`
-	NPSN        string `json:"npsn"`
-	SNBapp      string `json:"sn_bapp" gorm:"column:sn_bapp"`
-	NamaSekolah string `json:"nama_sekolah" gorm:"column:nama_sekolah"`
-	Kode        string `json:"kode" gorm:"column:kode"`
 }
 
 func isApprovedHandler(w http.ResponseWriter, r *http.Request) {
@@ -353,7 +395,6 @@ func isApprovedHandler(w http.ResponseWriter, r *http.Request) {
 	var results []IsApprovedResult
 	var err error
 
-	// Query raw SQL based on parameter
 	if noBapp != "" {
 		err = database.DB.Raw("SELECT hasil_cek, npsn, sn_bapp, nama_sekolah, kode FROM v_logs WHERE nomor_bapp = ? ORDER BY tanggal_pengecekan DESC, id DESC", noBapp).Scan(&results).Error
 	} else {
@@ -361,13 +402,11 @@ func isApprovedHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		log.Println("Error querying v_logs:", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{"message": "Gagal mengecek status approval.", "error": err.Error()})
 		return
 	}
 
-	// Deduplication (Client side logic migration: unique NPSN, take first)
 	uniqueMap := make(map[string]IsApprovedResult)
 	var uniqueLogs []IsApprovedResult
 
@@ -409,21 +448,18 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	storageDir := os.Getenv("SCAN_STORAGE_PATH")
-	if storageDir == "" {
-		storageDir = "./scans"
+	var records []database.ScanRecord
+	if err := database.DB.Where("npsn = ?", req.NPSN).Find(&records).Error; err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "Gagal mencari data di database"})
+		return
 	}
 
-	files, _ := os.ReadDir(storageDir)
 	deletedFilesCount := 0
-	prefix := req.NPSN + "_"
-
-	for _, file := range files {
-		if strings.HasPrefix(file.Name(), prefix) && strings.HasSuffix(file.Name(), ".pdf") {
-			fullPath := filepath.Join(storageDir, file.Name())
-			if err := os.Remove(fullPath); err == nil {
-				deletedFilesCount++
-			}
+	for _, record := range records {
+		err := deleteFromS3(record.Path, "scan-bapp-ifp")
+		if err == nil {
+			deletedFilesCount++
 		}
 	}
 
@@ -438,7 +474,7 @@ func deleteHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
-		"message": fmt.Sprintf("Operation successful. Deleted %d database records and %d physical files.", dbResult.RowsAffected, deletedFilesCount),
+		"message": fmt.Sprintf("Berhasil menghapus %d data dari database dan %d file dari S3.", dbResult.RowsAffected, deletedFilesCount),
 	})
 }
 
@@ -452,8 +488,8 @@ func exportHandler(w http.ResponseWriter, r *http.Request) {
 		NPSN        string
 		NamaSekolah string
 		Termin      string
-		CreatedAt   string // Tanggal Scan
-		Path        string // Link Path Scan
+		CreatedAt   string
+		Path        string
 	}
 
 	var rows []ExportRow
@@ -471,26 +507,21 @@ func exportHandler(w http.ResponseWriter, r *http.Request) {
 	`
 
 	if err := database.DB.Raw(query).Scan(&rows).Error; err != nil {
-		log.Println("Error fetching export data:", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
 	f := excelize.NewFile()
 	defer func() {
-		if err := f.Close(); err != nil {
-			log.Println("Error closing excel file:", err)
-		}
+		_ = f.Close()
 	}()
 
-	// Header
 	headers := []string{"NPSN", "Nama Sekolah", "Termin", "Tanggal Scan", "Link Path Scan"}
 	for i, h := range headers {
 		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
 		f.SetCellValue("Sheet1", cell, h)
 	}
 
-	// Data
 	for i, row := range rows {
 		f.SetCellValue("Sheet1", fmt.Sprintf("A%d", i+2), row.NPSN)
 		f.SetCellValue("Sheet1", fmt.Sprintf("B%d", i+2), row.NamaSekolah)
@@ -502,9 +533,36 @@ func exportHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	w.Header().Set("Content-Disposition", "attachment; filename=export_records.xlsx")
 
-	if err := f.Write(w); err != nil {
-		log.Println("Error writing excel to response:", err)
+	_ = f.Write(w)
+}
+
+func serveFromS3Handler(w http.ResponseWriter, r *http.Request) {
+	enableCors(&w)
+	if r.Method == "OPTIONS" {
+		return
 	}
+
+	fileName := strings.TrimPrefix(r.URL.Path, "/scans/")
+	if fileName == "" {
+		http.Error(w, "File tidak spesifik", http.StatusBadRequest)
+		return
+	}
+
+	encodedFileName := url.QueryEscape(fileName)
+
+	s3ApiUrl := fmt.Sprintf("%s/get?folder=scan-bapp-ifp&file=%s", baseApiUrl, encodedFileName)
+
+	resp, err := http.Get(s3ApiUrl)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		http.Error(w, "File tidak ditemukan di S3", http.StatusNotFound)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	w.Header().Set("Content-Disposition", resp.Header.Get("Content-Disposition"))
+
+	io.Copy(w, resp.Body)
 }
 
 func main() {
@@ -515,19 +573,10 @@ func main() {
 	http.HandleFunc("/records", recordsHandler)
 	http.HandleFunc("/is-approved", isApprovedHandler)
 	http.HandleFunc("/export", exportHandler)
+	http.HandleFunc("/scans/", serveFromS3Handler)
 	http.HandleFunc("/", home)
+
 	database.InitDB()
-
-	// Serve Static Files (Scans)
-	storageDir := os.Getenv("SCAN_STORAGE_PATH")
-	if storageDir == "" {
-		storageDir = "./scans"
-	}
-	// Pastikan folder ada
-	os.MkdirAll(storageDir, 0755)
-
-	fs := http.FileServer(http.Dir(storageDir))
-	http.Handle("/scans/", http.StripPrefix("/scans/", fs))
 
 	port := ":5000"
 	fmt.Printf("Database API (Golang) siap di http://localhost%s\n", port)

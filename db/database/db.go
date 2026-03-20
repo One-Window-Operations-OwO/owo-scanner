@@ -114,5 +114,5 @@ func InitDB() {
 		fmt.Printf("Index %s berhasil dibuat untuk optimasi!\n", indexName)
 	}
 
-	fmt.Println("Database & Tabel siap dipake, Bos Xeyla! ✨")
+	fmt.Println("Database & Table ready!")
 }
