@@ -161,6 +161,17 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var count int64
+	database.DB.Model(&database.ScanRecord{}).Where("npsn = ?", req.NPSN).Count(&count)
+	if count > 0 {
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Data dengan NPSN ini sudah ada! NPSN atau SN BAPP mungkin sudah terdaftar.",
+		})
+		return
+	}
+
 	fileNameBase := fmt.Sprintf("%s_%s", req.NPSN, req.SNBapp)
 	pdfName := fileNameBase + ".pdf"
 	pdfPath := filepath.Join(os.TempDir(), pdfName)
