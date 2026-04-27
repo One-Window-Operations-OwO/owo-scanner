@@ -18,6 +18,7 @@ import (
 
 	"github.com/jung-kurt/gofpdf"
 	"github.com/xuri/excelize/v2"
+	"gorm.io/gorm"
 )
 
 const baseApiUrl = "https://s3.pnj-digit.site"
@@ -229,8 +230,23 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 		Path: pdfName,
 	}
 
-	result := database.DB.Create(&newRecord)
-	if result.Error != nil {
+	errTx := database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&newRecord).Error; err != nil {
+			return err
+		}
+
+		history := database.ScanRecordHistory{
+			ScanRecordID: newRecord.ID,
+			Action:       "CREATE",
+		}
+		if err := tx.Create(&history).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if errTx != nil {
 		w.WriteHeader(http.StatusConflict)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": false,
@@ -323,7 +339,7 @@ func workStatsHandler(w http.ResponseWriter, r *http.Request) {
 
 	var scannedCount int64
 
-	database.DB.Table("scan_records").
+	database.DB.Table("scan_record_histories").
 		Where("DATE(created_at) BETWEEN ? AND ?", startDate, endDate).
 		Count(&scannedCount)
 
@@ -576,9 +592,125 @@ func serveFromS3Handler(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
+func updateHandler(w http.ResponseWriter, r *http.Request) {
+	enableCors(&w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+
+	var req struct {
+		NPSN       string `json:"npsn"`
+		SNBapp     string `json:"sn_bapp"`
+		Alasan     string `json:"alasan"`
+		ImageFront string `json:"image_front"`
+		ImageBack  string `json:"image_back"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "Request tidak valid"})
+		return
+	}
+
+	var existingRecord database.ScanRecord
+	if err := database.DB.Where("npsn = ?", req.NPSN).First(&existingRecord).Error; err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Data dengan NPSN ini tidak ditemukan!",
+		})
+		return
+	}
+
+	fileNameBase := fmt.Sprintf("%s_%s", req.NPSN, req.SNBapp)
+	pdfName := fileNameBase + ".pdf"
+	pdfPath := filepath.Join(os.TempDir(), pdfName)
+
+	pdf := gofpdf.New("P", "mm", "A4", "")
+
+	processImg := func(b64Str, label string) string {
+		if b64Str == "" {
+			return ""
+		}
+		i := strings.Index(b64Str, ",")
+		if i != -1 {
+			b64Str = b64Str[i+1:]
+		}
+		data, _ := base64.StdEncoding.DecodeString(b64Str)
+
+		tmpPath := filepath.Join(os.TempDir(), fmt.Sprintf("tmp_update_%s_%s.jpg", fileNameBase, label))
+		os.WriteFile(tmpPath, data, 0644)
+
+		pdf.AddPage()
+		pdf.SetFont("Arial", "B", 12)
+		pdf.Cell(0, 10, "Halaman "+label)
+		pdf.ImageOptions(tmpPath, 10, 20, 190, 0, false, gofpdf.ImageOptions{ImageType: "JPG"}, 0, "")
+
+		return tmpPath
+	}
+
+	tmpF := processImg(req.ImageFront, "Depan")
+	tmpB := processImg(req.ImageBack, "Belakang")
+
+	if err := pdf.OutputFileAndClose(pdfPath); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "Gagal membuat PDF"})
+		return
+	}
+
+	if tmpF != "" {
+		os.Remove(tmpF)
+	}
+	if tmpB != "" {
+		os.Remove(tmpB)
+	}
+
+	errUpload := uploadToS3(pdfPath, "scan-bapp-ifp")
+	os.Remove(pdfPath)
+
+	if errUpload != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "Gagal upload file PDF yang di-update ke S3"})
+		return
+	}
+
+	errTx := database.DB.Transaction(func(tx *gorm.DB) error {
+		existingRecord.Path = pdfName
+		if err := tx.Save(&existingRecord).Error; err != nil {
+			return err
+		}
+
+		history := database.ScanRecordHistory{
+			ScanRecordID: existingRecord.ID,
+			Action:       "UPDATE",
+			Catatan:      req.Alasan,
+		}
+		if err := tx.Create(&history).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+
+	if errTx != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Gagal update data di database",
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Dokumen berhasil diupdate!",
+	})
+}
+
 func main() {
 	http.HandleFunc("/delete", deleteHandler)
 	http.HandleFunc("/save", saveHandler)
+	http.HandleFunc("/update", updateHandler)
 	http.HandleFunc("/stats", statsHandler)
 	http.HandleFunc("/work-stats", workStatsHandler)
 	http.HandleFunc("/records", recordsHandler)

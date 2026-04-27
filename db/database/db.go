@@ -21,6 +21,14 @@ type ScanRecord struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type ScanRecordHistory struct {
+	ID           uint      `gorm:"primaryKey"`
+	ScanRecordID uint      `json:"scan_record_id" gorm:"index"`
+	Action       string    `json:"action" gorm:"type:varchar(20)"`
+	Catatan      string    `json:"catatan" gorm:"type:text"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 func InitDB() {
 	err := godotenv.Load()
 	if err != nil {
@@ -55,7 +63,7 @@ func InitDB() {
 	}
 
 	// 1. Auto Migrate (Update Kolom yang ada, Create Table)
-	err = DB.AutoMigrate(&ScanRecord{})
+	err = DB.AutoMigrate(&ScanRecord{}, &ScanRecordHistory{})
 	if err != nil {
 		log.Fatal("Gagal migrasi tabel:", err)
 	}
