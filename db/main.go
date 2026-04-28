@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"scanner-bridge/database"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jung-kurt/gofpdf"
@@ -22,6 +23,12 @@ import (
 )
 
 const baseApiUrl = "https://s3.pnj-digit.site"
+
+var (
+	statsCache     []DashboardStat
+	statsCacheTime time.Time
+	statsMutex     sync.RWMutex
+)
 
 type ScanPair struct {
 	Front string `json:"front"`
@@ -261,12 +268,26 @@ func saveHandler(w http.ResponseWriter, r *http.Request) {
 		"message": "Dokumen berhasil digabung jadi PDF dan disimpan ke S3!",
 	})
 }
-
 func statsHandler(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
 	if r.Method == "OPTIONS" {
 		return
 	}
+
+	statsMutex.RLock()
+	if time.Since(statsCacheTime) < 30*time.Second && len(statsCache) > 0 {
+		data := make([]DashboardStat, len(statsCache))
+		copy(data, statsCache)
+		statsMutex.RUnlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"data":    data,
+		})
+		return
+	}
+	statsMutex.RUnlock()
 
 	type Res struct {
 		Termin string
@@ -276,20 +297,25 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	var totalRes, scannedRes, logsRes []Res
 	statsMap := make(map[string]*DashboardStat)
 
-	database.DB.Table("schools").Select("termin, count(*) as cnt").Group("termin").Scan(&totalRes)
+	database.DB.Raw(`
+		SELECT termin, COUNT(npsn) as cnt 
+		FROM schools 
+		GROUP BY termin
+	`).Scan(&totalRes)
 
-	database.DB.Table("schools").
-		Joins("INNER JOIN scan_records ON scan_records.npsn = schools.npsn").
-		Select("schools.termin, count(distinct scan_records.npsn) as cnt").
-		Group("schools.termin").
-		Scan(&scannedRes)
+	database.DB.Raw(`
+		SELECT s.termin, COUNT(d.npsn) as cnt
+		FROM (SELECT DISTINCT npsn FROM scan_records) d
+		JOIN schools s ON d.npsn = s.npsn
+		GROUP BY s.termin
+	`).Scan(&scannedRes)
 
-	database.DB.Table("schools").
-		Joins("INNER JOIN logs ON logs.npsn = schools.npsn").
-		Where("logs.hasil_cek = ?", "sesuai").
-		Select("schools.termin, count(distinct logs.npsn) as cnt").
-		Group("schools.termin").
-		Scan(&logsRes)
+	database.DB.Raw(`
+		SELECT s.termin, COUNT(d.npsn) as cnt
+		FROM (SELECT DISTINCT npsn FROM logs WHERE hasil_cek = 'sesuai') d
+		JOIN schools s ON d.npsn = s.npsn
+		GROUP BY s.termin
+	`).Scan(&logsRes)
 
 	getStat := func(termin string) *DashboardStat {
 		if _, ok := statsMap[termin]; !ok {
@@ -314,6 +340,12 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 			finalStats = append(finalStats, *s)
 		}
 	}
+
+	statsMutex.Lock()
+	statsCache = make([]DashboardStat, len(finalStats))
+	copy(statsCache, finalStats)
+	statsCacheTime = time.Now()
+	statsMutex.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -355,7 +387,6 @@ func workStatsHandler(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 }
-
 func recordsHandler(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
 	if r.Method == "OPTIONS" {
@@ -364,32 +395,27 @@ func recordsHandler(w http.ResponseWriter, r *http.Request) {
 
 	searchNPSN := r.URL.Query().Get("npsn")
 	var records []RecordResponse
+	var srQuery string
+	var args []interface{}
 
-	query := `
+	if searchNPSN != "" {
+		srQuery = "SELECT id, npsn, path, created_at FROM scan_records WHERE npsn = ? ORDER BY created_at DESC LIMIT 50"
+		args = append(args, searchNPSN)
+	} else {
+		srQuery = "SELECT id, npsn, path, created_at FROM scan_records ORDER BY created_at DESC LIMIT 50"
+	}
+
+	query := fmt.Sprintf(`
 		SELECT 
 			sr.id, sr.npsn, sr.path, sr.created_at, 
 			s.nama_sekolah, s.kode,
 			l.sn_bapp, l.hasil_cek
-		FROM scan_records sr
+		FROM (%s) sr
 		LEFT JOIN schools s ON sr.npsn = s.npsn
-		LEFT JOIN (
-			SELECT l1.npsn, l1.sn_bapp, l1.hasil_cek
-			FROM logs l1
-			JOIN (
-				SELECT MAX(id) as id FROM logs GROUP BY npsn
-			) l2 ON l1.id = l2.id
-		) l ON sr.npsn = l.npsn
-		WHERE 1=1
-	`
-
-	args := []interface{}{}
-
-	if searchNPSN != "" {
-		query += " AND sr.npsn LIKE ?"
-		args = append(args, "%"+searchNPSN+"%")
-	}
-
-	query += " ORDER BY sr.created_at DESC LIMIT 50"
+		LEFT JOIN logs l ON l.id = (
+			SELECT MAX(id) FROM logs WHERE npsn = sr.npsn
+		)
+	`, srQuery)
 
 	if err := database.DB.Raw(query, args...).Scan(&records).Error; err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -403,7 +429,6 @@ func recordsHandler(w http.ResponseWriter, r *http.Request) {
 		"data":    records,
 	})
 }
-
 func isApprovedHandler(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
 	if r.Method == "OPTIONS" {
