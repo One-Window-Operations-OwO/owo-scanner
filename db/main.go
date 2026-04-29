@@ -63,14 +63,15 @@ type DashboardStat struct {
 }
 
 type RecordResponse struct {
-	ID          uint      `json:"id"`
-	NPSN        string    `json:"npsn"`
-	NamaSekolah string    `json:"nama_sekolah"`
-	SNBapp      string    `json:"sn_bapp"`
-	HasilCek    string    `json:"hasil_cek"`
-	Kode        string    `json:"kode"`
-	Path        string    `json:"path"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          uint      `json:"id" gorm:"column:id"`
+	NPSN        string    `json:"npsn" gorm:"column:npsn"`
+	NamaSekolah string    `json:"nama_sekolah" gorm:"column:nama_sekolah"`
+	SNBapp      string    `json:"sn_bapp" gorm:"column:sn_bapp"`
+	NomorBapp   string    `json:"nomor_bapp" gorm:"column:nomor_bapp"`
+	HasilCek    string    `json:"hasil_cek" gorm:"column:hasil_cek"`
+	Kode        string    `json:"kode" gorm:"column:kode"`
+	Path        string    `json:"path" gorm:"column:path"`
+	CreatedAt   time.Time `json:"created_at" gorm:"column:created_at"`
 }
 
 type IsApprovedResult struct {
@@ -402,8 +403,9 @@ func recordsHandler(w http.ResponseWriter, r *http.Request) {
 	var args []interface{}
 
 	if searchNPSN != "" {
-		srQuery = "SELECT id, npsn, path, created_at FROM scan_records WHERE npsn = ? ORDER BY created_at DESC LIMIT 50"
-		args = append(args, searchNPSN)
+		baseNPSN := strings.TrimSuffix(searchNPSN, "_1")
+		srQuery = "SELECT id, npsn, path, created_at FROM scan_records WHERE npsn IN (?, ?) ORDER BY created_at DESC LIMIT 50"
+		args = append(args, baseNPSN, baseNPSN+"_1")
 	} else {
 		srQuery = "SELECT id, npsn, path, created_at FROM scan_records ORDER BY created_at DESC LIMIT 50"
 	}
@@ -412,9 +414,9 @@ func recordsHandler(w http.ResponseWriter, r *http.Request) {
 		SELECT 
 			sr.id, sr.npsn, sr.path, sr.created_at, 
 			s.nama_sekolah, s.kode,
-			l.sn_bapp, l.hasil_cek
+			l.sn_bapp, s.nomor_bapp, l.hasil_cek
 		FROM (%s) sr
-		LEFT JOIN schools s ON sr.npsn = s.npsn
+		LEFT JOIN schools s ON s.npsn = sr.npsn
 		LEFT JOIN logs l ON l.id = (
 			SELECT MAX(id) FROM logs WHERE npsn = sr.npsn
 		)
@@ -432,6 +434,7 @@ func recordsHandler(w http.ResponseWriter, r *http.Request) {
 		"data":    records,
 	})
 }
+
 func isApprovedHandler(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
 	if r.Method == "OPTIONS" {
