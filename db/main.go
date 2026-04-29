@@ -77,6 +77,7 @@ type IsApprovedResult struct {
 	HasilCek    string `json:"hasil_cek"`
 	NPSN        string `json:"npsn"`
 	SNBapp      string `json:"sn_bapp" gorm:"column:sn_bapp"`
+	NomorBapp   string `json:"nomor_bapp" gorm:"column:nomor_bapp"`
 	NamaSekolah string `json:"nama_sekolah" gorm:"column:nama_sekolah"`
 	Kode        string `json:"kode" gorm:"column:kode"`
 }
@@ -450,9 +451,11 @@ func isApprovedHandler(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if noBapp != "" {
-		err = database.DB.Raw("SELECT hasil_cek, npsn, sn_bapp, nama_sekolah, kode FROM v_logs WHERE nomor_bapp = ? ORDER BY tanggal_pengecekan DESC, id DESC", noBapp).Scan(&results).Error
+		err = database.DB.Raw("SELECT hasil_cek, npsn, sn_bapp, nomor_bapp, nama_sekolah, kode FROM v_logs WHERE nomor_bapp = ? ORDER BY tanggal_pengecekan DESC, id DESC", noBapp).Scan(&results).Error
 	} else {
-		err = database.DB.Raw("SELECT hasil_cek, npsn, sn_bapp, nama_sekolah, kode FROM v_logs WHERE npsn = ? ORDER BY tanggal_pengecekan DESC, id DESC", npsn).Scan(&results).Error
+		baseNpsn := strings.Split(npsn, "_")[0]
+		likePattern := baseNpsn + "\\_%"
+		err = database.DB.Raw("SELECT hasil_cek, npsn, sn_bapp, nomor_bapp, nama_sekolah, kode FROM v_logs WHERE npsn = ? OR npsn LIKE ? ORDER BY tanggal_pengecekan DESC, id DESC", baseNpsn, likePattern).Scan(&results).Error
 	}
 
 	if err != nil {
