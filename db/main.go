@@ -581,13 +581,18 @@ func exportHandler(w http.ResponseWriter, r *http.Request) {
 		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
 		f.SetCellValue("Sheet1", cell, h)
 	}
+	baseURL := "https://scan-api.pnj-digit.site/scans/"
 
 	for i, row := range rows {
+		// Path di-encode agar spasi jadi %20, dll.
+		encodedPath := url.PathEscape(row.Path)
+		fullURL := baseURL + encodedPath
+
 		f.SetCellValue("Sheet1", fmt.Sprintf("A%d", i+2), row.NPSN)
 		f.SetCellValue("Sheet1", fmt.Sprintf("B%d", i+2), row.NamaSekolah)
 		f.SetCellValue("Sheet1", fmt.Sprintf("C%d", i+2), row.Termin)
 		f.SetCellValue("Sheet1", fmt.Sprintf("D%d", i+2), row.CreatedAt)
-		f.SetCellValue("Sheet1", fmt.Sprintf("E%d", i+2), row.Path)
+		f.SetCellValue("Sheet1", fmt.Sprintf("E%d", i+2), fullURL)
 	}
 
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
