@@ -544,61 +544,83 @@ func exportHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type ExportRow struct {
-		NPSN        string
-		NamaSekolah string
-		Termin      string
-		CreatedAt   string
-		Path        string
+	rows, err := database.DB.Raw(`
+        SELECT 
+            sr.npsn, 
+            s.nama_sekolah, 
+            s.termin, 
+            DATE_FORMAT(sr.created_at, '%Y-%m-%d %H:%i:%s') as created_at, 
+            sr.path
+        FROM scan_records sr
+        LEFT JOIN schools s ON sr.npsn = s.npsn
+        ORDER BY sr.created_at DESC
+    `).Rows() // Menggunakan iterator
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
 	}
+	defer rows.Close()
 
-	var rows []ExportRow
+	f := excelize.NewFile()
 
-	query := `
-		SELECT 
-			sr.npsn, 
-			s.nama_sekolah, 
-			s.termin, 
-			DATE_FORMAT(sr.created_at, '%Y-%m-%d %H:%i:%s') as created_at, 
-			sr.path
-		FROM scan_records sr
-		LEFT JOIN schools s ON sr.npsn = s.npsn
-		ORDER BY sr.created_at DESC
-	`
-
-	if err := database.DB.Raw(query).Scan(&rows).Error; err != nil {
+	// 2. Gunakan Stream Writer
+	sw, err := f.NewStreamWriter("Sheet1")
+	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	f := excelize.NewFile()
-	defer func() {
-		_ = f.Close()
-	}()
-
-	headers := []string{"NPSN", "Nama Sekolah", "Termin", "Tanggal Scan", "Link Path Scan"}
-	for i, h := range headers {
-		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
-		f.SetCellValue("Sheet1", cell, h)
+	// Set Header menggunakan Stream Writer
+	headers := []interface{}{"NPSN", "Nama Sekolah", "Termin", "Tanggal Scan", "Link Path Scan"}
+	if err := sw.SetRow("A1", headers); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
 	}
+
 	baseURL := "https://scan-api.pnj-digit.site/scans/"
+	rowIndex := 2
 
-	for i, row := range rows {
-		// Path di-encode agar spasi jadi %20, dll.
-		encodedPath := url.PathEscape(row.Path)
+	// 3. Iterasi data satu per satu
+	for rows.Next() {
+		var npsn, namaSekolah, termin, createdAt, path string
+		if err := rows.Scan(&npsn, &namaSekolah, &termin, &createdAt, &path); err != nil {
+			continue
+		}
+
+		encodedPath := url.PathEscape(path)
 		fullURL := baseURL + encodedPath
+		rowContent := []interface{}{
+			npsn,
+			namaSekolah,
+			termin,
+			createdAt,
+			excelize.Cell{
+				Value:   fullURL,
+				Formula: "", // Kosongkan
+				StyleID: 0,  // Bisa ditambah style jika mau
+			},
+		}
 
-		f.SetCellValue("Sheet1", fmt.Sprintf("A%d", i+2), row.NPSN)
-		f.SetCellValue("Sheet1", fmt.Sprintf("B%d", i+2), row.NamaSekolah)
-		f.SetCellValue("Sheet1", fmt.Sprintf("C%d", i+2), row.Termin)
-		f.SetCellValue("Sheet1", fmt.Sprintf("D%d", i+2), row.CreatedAt)
-		f.SetCellValue("Sheet1", fmt.Sprintf("E%d", i+2), fullURL)
+		cellAddr, _ := excelize.CoordinatesToCellName(1, rowIndex)
+		if err := sw.SetRow(cellAddr, rowContent); err != nil {
+			break
+		}
+
+		rowIndex++
+	}
+
+	// Selesaikan penulisan stream
+	if err := sw.Flush(); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	w.Header().Set("Content-Disposition", "attachment; filename=export_records.xlsx")
 
-	_ = f.Write(w)
+	if err := f.Write(w); err != nil {
+		// Handle error
+	}
 }
 
 func serveFromS3Handler(w http.ResponseWriter, r *http.Request) {
