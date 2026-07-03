@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"scanner-bridge/database"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -404,12 +405,27 @@ func recordsHandler(w http.ResponseWriter, r *http.Request) {
 
 	if searchNPSN != "" {
 		baseNPSN := strings.TrimSuffix(searchNPSN, "_1")
-		srQuery = "SELECT id, npsn, path, created_at FROM scan_records WHERE npsn IN (?, ?) ORDER BY created_at DESC LIMIT 50"
+		srQuery = "SELECT id, npsn, path, created_at FROM scan_records WHERE npsn IN (?, ?) ORDER BY created_at DESC"
 		args = append(args, baseNPSN, baseNPSN+"_1")
 	} else {
-		srQuery = "SELECT id, npsn, path, created_at FROM scan_records ORDER BY created_at DESC LIMIT 50"
+		srQuery = "SELECT id, npsn, path, created_at FROM scan_records ORDER BY created_at DESC"
+	}
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if p, err := strconv.Atoi(l); err == nil && p > 0 && p <= 100 {
+			limit = p
+		}
 	}
 
+	offset := 0
+	if s := r.URL.Query().Get("start"); s != "" {
+		if p, err := strconv.Atoi(s); err == nil && p >= 0 {
+			offset = p
+		}
+	}
+
+	srQuery += " LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
 	query := fmt.Sprintf(`
 		SELECT 
 			sr.id, sr.npsn, sr.path, sr.created_at, 
